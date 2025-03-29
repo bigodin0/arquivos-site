@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Search, Bell, ChevronDown, ExternalLink, Settings, LogOut, User } from 'lucide-react';
+import SecureStorageService from '../../services/secureStorage';
 
 /**
  * Navbar premium com design elegante usando a paleta teal & cinza
@@ -39,6 +40,14 @@ const Navbar = ({
   const getInitials = (name) => {
     if (!name) return 'U';
     return name.split(' ').map(n => n[0]).join('').toUpperCase();
+  };
+  
+  // Função segura para lidar com logout
+  const handleLogout = () => {
+    // Limpar token seguramente ao fazer logout
+    SecureStorageService.clearToken();
+    // Chamar função de logout fornecida por props
+    onLogout();
   };
   
   return (
@@ -201,7 +210,7 @@ const Navbar = ({
                     </a>
                     <div className="border-t border-gray-200 my-1"></div>
                     <button 
-                      onClick={onLogout}
+                      onClick={handleLogout}
                       className="w-full flex items-center px-4 py-2 text-sm text-text-medium hover:bg-bg-light transition-colors"
                     >
                       <LogOut size={16} className="mr-3 text-text-light" />

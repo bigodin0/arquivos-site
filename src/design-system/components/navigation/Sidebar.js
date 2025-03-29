@@ -11,8 +11,9 @@ import {
   ChevronRight, 
   User,
   Menu,
-  X  // Adicionado o ícone X que estava faltando
+  X
 } from 'lucide-react';
+import SecureStorageService from '../../services/secureStorage';
 
 /**
  * Sidebar premium com design elegante usando a paleta teal & cinza
@@ -34,7 +35,7 @@ const Sidebar = ({
   const menuItems = [
     { 
       id: 'dashboard', 
-      path: '/dashboard',  // Alterado de '/' para '/dashboard'
+      path: '/dashboard',
       label: 'Dashboard', 
       icon: <MessageSquare size={20} />,
       exact: true
@@ -78,6 +79,14 @@ const Sidebar = ({
   
   const toggleMobile = () => {
     setMobileOpen(!mobileOpen);
+  };
+  
+  // Função segura para lidar com logout
+  const handleLogout = () => {
+    // Limpar token seguramente ao fazer logout
+    SecureStorageService.clearToken();
+    // Chamar função de logout fornecida por props
+    onLogout();
   };
   
   // Mobile menu overlay
@@ -196,7 +205,7 @@ const Sidebar = ({
         {/* Logout button */}
         <div className="p-2 border-t">
           <button
-            onClick={onLogout}
+            onClick={handleLogout}
             className={`w-full flex items-center p-2 rounded-md text-text-medium hover:bg-bg-dark transition-colors ${
               collapsed && !isMobile ? 'justify-center' : ''
             }`}

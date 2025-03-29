@@ -1,15 +1,29 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import SecureStorageService from '../../services/secureStorage';
 
 const ProtectedRoute = ({ children }) => {
-  const { isAuthenticated, loading } = useAuth();
+  const { isAuthenticated, loading, refreshToken } = useAuth();
   const location = useLocation();
   
   // Verificar se a rota atual é uma rota pública que não deve redirecionar
   const isPublicRoute = location.pathname.startsWith('/shared/') || 
                        location.pathname.startsWith('/embed/') ||
                        location.pathname === '/planos';
+
+  // Efeito para verificar se o token precisa ser renovado
+  useEffect(() => {
+    // Não precisamos verificar para rotas públicas
+    if (isPublicRoute) return;
+    
+    // Verificar se o token está próximo de expirar e tentar renovar
+    if (SecureStorageService.shouldRefreshToken()) {
+      refreshToken().catch(err => {
+        console.warn('Erro ao renovar token:', err);
+      });
+    }
+  }, [location.pathname, isPublicRoute, refreshToken]);
 
   // Mostrar nada enquanto carrega para evitar flashes
   if (loading) {
@@ -23,8 +37,12 @@ const ProtectedRoute = ({ children }) => {
     return children;
   }
   
-  // Se não estiver autenticado e não for uma rota pública, redirecionar para login
+  // Usar o SecureStorageService para uma verificação mais segura de autenticação
   if (!isAuthenticated()) {
+    // Se não estiver autenticado, limpar qualquer token expirado ou inválido
+    SecureStorageService.clearAuth();
+    
+    // Redirecionar para a página de login
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
   

@@ -1,16 +1,32 @@
 // src/config/api.js
 // Configuração central para endpoints da API
 
-// Base URL para API - Corrigido para apontar para a URL base correta
-const API_BASE_URL = 'https://simulachat-backend.onrender.com';
+// Detecção dinâmica do ambiente (igual ao storage.js)
+const isDevelopment = process.env.NODE_ENV === 'development';
+const API_BASE_URL = isDevelopment 
+  ? 'http://localhost:5000' // URL de desenvolvimento
+  : 'https://simulachat-backend.onrender.com'; // URL de produção
+
+// Base URL para o front-end (para links de compartilhamento)
+export const BASE_URL = process.env.REACT_APP_BASE_URL || window.location.origin;
+
+// Função para gerar URLs completos para compartilhamento
+export const generateShareUrl = (shareCode) => `${BASE_URL}/shared/${shareCode}`;
+export const generateEmbedUrl = (shareCode) => `${BASE_URL}/embed/${shareCode}`;
+
+// Constantes relacionadas à autenticação
+export const TOKEN_EXPIRY_TIME = 24 * 60 * 60 * 1000; // 24 horas em milissegundos
+export const TOKEN_REFRESH_THRESHOLD = 30 * 60 * 1000; // 30 minutos em milissegundos
 
 export default {
   API_BASE_URL,
+  BASE_URL,
   endpoints: {
     // Auth endpoints
     login: `${API_BASE_URL}/api/auth/login`,
     register: `${API_BASE_URL}/api/auth/register`,
     me: `${API_BASE_URL}/api/auth/me`,
+    refreshToken: `${API_BASE_URL}/api/auth/refresh-token`, // Endpoint para renovar tokens
     
     // Flows endpoints
     flows: `${API_BASE_URL}/api/flows`,
@@ -26,5 +42,11 @@ export default {
     checkout: `${API_BASE_URL}/api/checkout`,
     assinaturas: `${API_BASE_URL}/api/criar-assinatura`,
     verificarAssinatura: `${API_BASE_URL}/api/verificar-assinatura`
-  }
+  },
+  // Funções de utilidade para URLs de compartilhamento
+  generateShareUrl,
+  generateEmbedUrl,
+  // Exportar constantes relacionadas à autenticação
+  TOKEN_EXPIRY_TIME,
+  TOKEN_REFRESH_THRESHOLD
 };
