@@ -1,5 +1,6 @@
 // Serviço para gerenciar o armazenamento dos fluxos de mensagens
 import axios from 'axios';
+import SecureStorageService from './secureStorage';
 
 // URL base da API - Detecção dinâmica do ambiente
 const isDevelopment = process.env.NODE_ENV === 'development';
@@ -47,24 +48,68 @@ const StorageService = {
     localStorage.removeItem(`cache_${key}`);
   },
 
-  // Verificar se há um usuário logado
+  // Verificar se há um usuário logado (usando SecureStorageService)
   isUserLoggedIn: () => {
-    const token = localStorage.getItem('token');
-    return !!token;
+    return SecureStorageService.isTokenValid();
   },
 
-  // Obter o token de autenticação para chamadas API
+  // Obter o token de autenticação para chamadas API (usando SecureStorageService)
   getAuthToken: () => {
-    return localStorage.getItem('token');
+    return SecureStorageService.getToken();
   },
 
-  // Obter headers para requisições autenticadas
+  // Método para obter headers de autenticação com melhor tratamento
   getAuthHeaders: () => {
-    const token = StorageService.getAuthToken();
+    // Usar SecureStorageService para obter headers de autenticação
+    const authHeaders = SecureStorageService.getAuthHeaders();
+    if (authHeaders && authHeaders.headers) {
+      return authHeaders.headers;
+    }
+    
+    // Fallback para o caso de SecureStorageService não retornar headers válidos
     return {
       'Content-Type': 'application/json',
-      'Authorization': token ? `Bearer ${token}` : ''
+      'Access-Control-Allow-Origin': process.env.NODE_ENV === 'development' ? '*' : null
     };
+  },
+
+  // Método para chamadas de API com tratamento de erros e token
+  makeApiCall: async (endpoint, method = 'GET', data = null) => {
+    try {
+      // Verificar se o token é válido
+      if (!SecureStorageService.isTokenValid()) {
+        throw new Error('Não autenticado');
+      }
+
+      // Obter headers de autenticação usando SecureStorageService
+      const headers = SecureStorageService.getAuthHeaders().headers;
+
+      const config = {
+        method,
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json'
+        }
+      };
+
+      if (data) {
+        config.body = JSON.stringify(data);
+      }
+
+      const response = await fetch(`${API_BASE_URL}/${endpoint}`, config);
+
+      if (response.status === 401 || response.status === 403) {
+        // Token inválido ou expirado, limpar token
+        SecureStorageService.clearToken();
+        window.location.href = '/login';
+        throw new Error('Sessão expirada');
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('Erro na chamada da API:', error);
+      throw error;
+    }
   },
 
   // === FLUXOS ===
@@ -79,15 +124,13 @@ const StorageService = {
         return cachedFlows;
       }
 
-      // Primeiro tenta obter da API
-      const token = StorageService.getAuthToken();
-      if (token) {
+      // Primeiro tenta obter da API se o token for válido
+      if (SecureStorageService.isTokenValid()) {
         try {
-          const response = await axios.get(`${API_BASE_URL}/flows`, {
-            headers: {
-              'Authorization': `Bearer ${token}`
-            }
-          });
+          // Obter headers de autenticação usando SecureStorageService
+          const headers = SecureStorageService.getAuthHeaders().headers;
+          
+          const response = await axios.get(`${API_BASE_URL}/flows`, { headers });
           
           if (response.data.success) {
             // Salvar no cache
@@ -96,6 +139,13 @@ const StorageService = {
           }
         } catch (apiError) {
           console.warn('Erro ao buscar fluxos da API:', apiError);
+          
+          // Verificar se é um erro de autenticação
+          if (apiError.response && apiError.response.status === 401) {
+            // Token inválido ou expirado, limpar token
+            SecureStorageService.clearToken();
+          }
+          
           // Continuar para fallback
         }
       }
@@ -133,15 +183,13 @@ const StorageService = {
         contactName: flow.contactName || 'Atendimento'
       };
       
-      // Tentar salvar na API
-      const token = StorageService.getAuthToken();
-      if (token) {
+      // Tentar salvar na API se o token for válido
+      if (SecureStorageService.isTokenValid()) {
         try {
-          const response = await axios.post(`${API_BASE_URL}/flows`, flowData, {
-            headers: {
-              'Authorization': `Bearer ${token}`
-            }
-          });
+          // Obter headers de autenticação usando SecureStorageService
+          const headers = SecureStorageService.getAuthHeaders().headers;
+          
+          const response = await axios.post(`${API_BASE_URL}/flows`, flowData, { headers });
           
           if (response.data.success) {
             // Atualizar estatísticas
@@ -154,6 +202,13 @@ const StorageService = {
           }
         } catch (apiError) {
           console.warn('Erro ao salvar fluxo na API:', apiError);
+          
+          // Verificar se é um erro de autenticação
+          if (apiError.response && apiError.response.status === 401) {
+            // Token inválido ou expirado, limpar token
+            SecureStorageService.clearToken();
+          }
+          
           // Continuar para fallback
         }
       }
@@ -186,14 +241,10 @@ const StorageService = {
       // Calcular messageCount
       flow.messageCount = Array.isArray(flow.messages) ? flow.messages.length : 0;
       
-      // Verificar se o fluxo já existe no array
-      const existingIndex = flows.findIndex(f => f.id === flow.id);
-      if (existingIndex !== -1) {
-        flows[existingIndex] = flow;
-      } else {
-        flows.push(flow);
-      }
+      // Adicionar ao array de fluxos
+      flows.push(flow);
       
+      // Salvar no localStorage
       localStorage.setItem(StorageService.KEYS.FLOWS, JSON.stringify(flows));
       
       // Atualizar estatísticas
@@ -205,42 +256,46 @@ const StorageService = {
       return flow;
     } catch (error) {
       console.error('Erro ao salvar fluxo:', error);
-      
       // Último fallback: tentar salvar apenas no localStorage
-      const flows = localStorage.getItem(StorageService.KEYS.FLOWS);
-      const flowsArray = flows ? JSON.parse(flows) : [];
-      
-      // Gerar ID se necessário
-      if (!flow.id) {
-        flow.id = Date.now();
-        flow.createdAt = new Date().toLocaleDateString();
+      try {
+        const flows = localStorage.getItem(StorageService.KEYS.FLOWS);
+        const flowsArray = flows ? JSON.parse(flows) : [];
+        
+        // Gerar ID se necessário
+        if (!flow.id) {
+          flow.id = Date.now();
+          flow.createdAt = new Date().toLocaleDateString();
+        }
+        
+        flow.updatedAt = new Date().toLocaleDateString();
+        
+        // Garantir que flow.messages seja sempre um array
+        if (!flow.messages) {
+          flow.messages = [];
+        }
+        
+        // Calcular messageCount
+        flow.messageCount = Array.isArray(flow.messages) ? flow.messages.length : 0;
+        
+        // Verificar se já existe
+        const existingIndex = flowsArray.findIndex(f => f.id === flow.id);
+        if (existingIndex !== -1) {
+          flowsArray[existingIndex] = flow;
+        } else {
+          flowsArray.push(flow);
+        }
+        
+        localStorage.setItem(StorageService.KEYS.FLOWS, JSON.stringify(flowsArray));
+        StorageService.updateStats('flow_save');
+        
+        // Invalidar o cache de fluxos
+        StorageService.invalidateCache('flows');
+        
+        return flow;
+      } catch (localError) {
+        console.error('Erro no fallback local:', localError);
+        return null;
       }
-      
-      flow.updatedAt = new Date().toLocaleDateString();
-      
-      // Garantir que flow.messages seja sempre um array
-      if (!flow.messages) {
-        flow.messages = [];
-      }
-      
-      // Calcular messageCount
-      flow.messageCount = Array.isArray(flow.messages) ? flow.messages.length : 0;
-      
-      // Verificar se já existe
-      const existingIndex = flowsArray.findIndex(f => f.id === flow.id);
-      if (existingIndex !== -1) {
-        flowsArray[existingIndex] = flow;
-      } else {
-        flowsArray.push(flow);
-      }
-      
-      localStorage.setItem(StorageService.KEYS.FLOWS, JSON.stringify(flowsArray));
-      StorageService.updateStats('flow_save');
-      
-      // Invalidar o cache de fluxos
-      StorageService.invalidateCache('flows');
-      
-      return flow;
     }
   },
 
@@ -269,15 +324,13 @@ const StorageService = {
         contactName: flow.contactName || 'Atendimento'
       };
       
-      // Tentar atualizar na API
-      const token = StorageService.getAuthToken();
-      if (token) {
+      // Tentar atualizar na API se o token for válido
+      if (SecureStorageService.isTokenValid()) {
         try {
-          const response = await axios.put(`${API_BASE_URL}/flows/${flow.id}`, flowData, {
-            headers: {
-              'Authorization': `Bearer ${token}`
-            }
-          });
+          // Obter headers de autenticação usando SecureStorageService
+          const headers = SecureStorageService.getAuthHeaders().headers;
+          
+          const response = await axios.put(`${API_BASE_URL}/flows/${flow.id}`, flowData, { headers });
           
           if (response.data.success) {
             // Atualizar estatísticas
@@ -291,11 +344,16 @@ const StorageService = {
           }
         } catch (apiError) {
           console.warn('Erro ao atualizar fluxo na API:', apiError);
+          
+          // Verificar se é um erro de autenticação
+          if (apiError.response && apiError.response.status === 401) {
+            // Token inválido ou expirado, limpar token
+            SecureStorageService.clearToken();
+          }
+          
           // Continuar para fallback
         }
-      }
-      
-      // Fallback: atualizar localmente
+      }// Fallback: atualizar localmente
       console.warn('Fallback: Atualizando fluxo no localStorage');
       
       const flows = await StorageService.getFlows();
@@ -325,7 +383,6 @@ const StorageService = {
       return flow;
     } catch (error) {
       console.error('Erro ao atualizar fluxo:', error);
-      
       // Último fallback: tentar atualizar apenas no localStorage
       try {
         const flows = localStorage.getItem(StorageService.KEYS.FLOWS);
@@ -346,14 +403,19 @@ const StorageService = {
         
         flowsArray[index] = flow;
         
-        localStorage.setItem(StorageService.KEYS.FLOWS, JSON.stringify(flowsArray));
-        StorageService.updateStats('flow_edit');
-        
-        // Invalidar cache
-        StorageService.invalidateCache('flows');
-        StorageService.invalidateCache(`flow_${flow.id}`);
-        
-        return flow;
+        try {
+          localStorage.setItem(StorageService.KEYS.FLOWS, JSON.stringify(flowsArray));
+          StorageService.updateStats('flow_edit');
+          
+          // Invalidar cache
+          StorageService.invalidateCache('flows');
+          StorageService.invalidateCache(`flow_${flow.id}`);
+          
+          return flow;
+        } catch (storageError) {
+          console.error('Erro ao salvar no localStorage:', storageError);
+          return null;
+        }
       } catch (localError) {
         console.error('Erro no fallback local:', localError);
         return null;
@@ -364,15 +426,13 @@ const StorageService = {
   // Excluir um fluxo
   deleteFlow: async (id) => {
     try {
-      // Tentar excluir na API
-      const token = StorageService.getAuthToken();
-      if (token) {
+      // Tentar excluir na API se o token for válido
+      if (SecureStorageService.isTokenValid()) {
         try {
-          const response = await axios.delete(`${API_BASE_URL}/flows/${id}`, {
-            headers: {
-              'Authorization': `Bearer ${token}`
-            }
-          });
+          // Obter headers de autenticação usando SecureStorageService
+          const headers = SecureStorageService.getAuthHeaders().headers;
+          
+          const response = await axios.delete(`${API_BASE_URL}/flows/${id}`, { headers });
           
           if (response.data.success) {
             // Atualizar estatísticas
@@ -387,6 +447,13 @@ const StorageService = {
           }
         } catch (apiError) {
           console.warn('Erro ao excluir fluxo na API:', apiError);
+          
+          // Verificar se é um erro de autenticação
+          if (apiError.response && apiError.response.status === 401) {
+            // Token inválido ou expirado, limpar token
+            SecureStorageService.clearToken();
+          }
+          
           // Continuar para fallback
         }
       }
@@ -408,22 +475,26 @@ const StorageService = {
       return updatedFlows;
     } catch (error) {
       console.error('Erro ao excluir fluxo:', error);
-      
       // Último fallback: tentar excluir apenas no localStorage
       try {
         const flows = localStorage.getItem(StorageService.KEYS.FLOWS);
         const flowsArray = flows ? JSON.parse(flows) : [];
         
         const updatedFlows = flowsArray.filter(f => f.id !== id);
-        localStorage.setItem(StorageService.KEYS.FLOWS, JSON.stringify(updatedFlows));
         
-        StorageService.updateStats('flow_delete');
-        
-        // Invalidar cache
-        StorageService.invalidateCache('flows');
-        StorageService.invalidateCache(`flow_${id}`);
-        
-        return updatedFlows;
+        try {
+          localStorage.setItem(StorageService.KEYS.FLOWS, JSON.stringify(updatedFlows));
+          StorageService.updateStats('flow_delete');
+          
+          // Invalidar cache
+          StorageService.invalidateCache('flows');
+          StorageService.invalidateCache(`flow_${id}`);
+          
+          return updatedFlows;
+        } catch (storageError) {
+          console.error('Erro ao salvar no localStorage:', storageError);
+          return flowsArray;
+        }
       } catch (localError) {
         console.error('Erro no fallback local:', localError);
         const flows = localStorage.getItem(StorageService.KEYS.FLOWS);
@@ -442,15 +513,13 @@ const StorageService = {
         return cachedFlow;
       }
       
-      // Tentar obter da API
-      const token = StorageService.getAuthToken();
-      if (token) {
+      // Tentar obter da API se o token for válido
+      if (SecureStorageService.isTokenValid()) {
         try {
-          const response = await axios.get(`${API_BASE_URL}/flows/${id}`, {
-            headers: {
-              'Authorization': `Bearer ${token}`
-            }
-          });
+          // Obter headers de autenticação usando SecureStorageService
+          const headers = SecureStorageService.getAuthHeaders().headers;
+          
+          const response = await axios.get(`${API_BASE_URL}/flows/${id}`, { headers });
           
           if (response.data.success) {
             // Garantir que messages seja um array
@@ -463,6 +532,13 @@ const StorageService = {
           }
         } catch (apiError) {
           console.warn('Erro ao obter fluxo da API:', apiError);
+          
+          // Verificar se é um erro de autenticação
+          if (apiError.response && apiError.response.status === 401) {
+            // Token inválido ou expirado, limpar token
+            SecureStorageService.clearToken();
+          }
+          
           // Continuar para fallback
         }
       }
@@ -489,21 +565,25 @@ const StorageService = {
       return flow;
     } catch (error) {
       console.error('Erro ao obter fluxo:', error);
-      
       // Último fallback: tentar obter diretamente do localStorage
       try {
         const flows = localStorage.getItem(StorageService.KEYS.FLOWS);
         if (!flows) return null;
         
-        const flowsArray = JSON.parse(flows);
-        const flow = flowsArray.find(f => Number(f.id) === Number(id));
-        
-        // Garantir que messages seja um array
-        if (flow && !flow.messages) {
-          flow.messages = [];
+        try {
+          const flowsArray = JSON.parse(flows);
+          const flow = flowsArray.find(f => Number(f.id) === Number(id));
+          
+          // Garantir que messages seja um array
+          if (flow && !flow.messages) {
+            flow.messages = [];
+          }
+          
+          return flow;
+        } catch (parseError) {
+          console.error('Erro ao analisar fluxos:', parseError);
+          return null;
         }
-        
-        return flow;
       } catch (localError) {
         console.error('Erro no fallback local:', localError);
         return null;
@@ -600,387 +680,283 @@ const StorageService = {
     
     console.error("Fluxo não encontrado em nenhum lugar:", flowId);
     return null;
-  },
-
-  // Fixar links existentes para usar o domínio atual
+  },// Fixar links existentes para usar o domínio atual
   fixExistingLinks: async () => {
     const flows = await StorageService.getFlows();
     const baseUrl = window.location.origin;
     let updated = false;
     
     const updatedFlows = flows.map(flow => {
-      // Verificar se o link existe e precisa ser atualizado
-      if (flow.link) {
-        // Extrair o ID do fluxo do link atual
-        const urlParts = flow.link.split('/');
-        const flowId = urlParts[urlParts.length - 1];
-        
-        // Criar novo link com o domínio atual
-        const newLink = `${baseUrl}/flow/${flowId}`;
-        
-        // Atualizar apenas se o link for diferente
-        if (flow.link !== newLink) {
-          flow.link = newLink;
-          updated = true;
-        }
-      }
-      
-      // Garantir que messages seja um array
-      if (!flow.messages) {
-        flow.messages = [];
+      // Verificar se o link usa simulachat.vercel.app ou similar
+      if (flow.link && (
+        flow.link.includes('simulachat.vercel.app') || 
+        flow.link.includes('simulachat.app') ||
+        flow.link.includes('localhost')
+      )) {
+        // Atualizar para usar o domínio atual
+        flow.link = `${baseUrl}/flow/${flow.id}`;
         updated = true;
       }
-      
       return flow;
     });
     
-    // Atualizar na API ou salvar localmente
     if (updated) {
-      // Salvar cada fluxo atualizado
-      for (const flow of updatedFlows) {
-        await StorageService.updateFlow(flow);
-      }
-      
-      // Para compatibilidade
       localStorage.setItem(StorageService.KEYS.FLOWS, JSON.stringify(updatedFlows));
       
-      // Invalidar cache de fluxos
+      // Invalidar cache
       StorageService.invalidateCache('flows');
+      
+      console.log('Links atualizados para usar o domínio atual');
     }
     
     return updatedFlows;
   },
 
   // === TEMPLATES ===
-
+  
   // Obter todos os templates
-  getTemplates: () => {
-    // Verificar cache primeiro
-    const cachedTemplates = StorageService.getCachedData('templates');
-    if (cachedTemplates) {
-      console.log('Usando templates do cache');
-      return cachedTemplates;
-    }
-    
-    // Templates padrão caso não exista nenhum
-    const defaultTemplates = [
-      {
-        id: 1,
-        title: "Atendimento inicial WhatsApp",
-        description: "Template básico para primeiro atendimento no WhatsApp",
-        category: "atendimento",
-        platform: "whatsapp",
-        messages: [
-          {
-            id: 101,
-            type: "text",
-            sender: "business",
-            content: "Olá! Como posso ajudar você hoje?",
-            delay: 0
-          },
-          {
-            id: 102,
-            type: "text",
-            sender: "customer",
-            content: "Olá, tenho uma dúvida sobre o produto X",
-            delay: 1
-          },
-          {
-            id: 103,
-            type: "buttons",
-            sender: "business",
-            content: "Claro! Posso ajudar com informações sobre o produto X. O que você gostaria de saber?",
-            delay: 1,
-            buttons: [
-              {
-                id: "btn1",
-                text: "Preço",
-                responseMessage: "Quanto custa o produto X?",
-                jumpTo: 104
-              },
-              {
-                id: "btn2",
-                text: "Características",
-                responseMessage: "Quais são as características do produto X?",
-                jumpTo: 105
-              }
-            ]
-          },
-          {
-            id: 104,
-            type: "text",
-            sender: "business",
-            content: "O produto X custa R$ 99,90 e pode ser parcelado em até 10x sem juros.",
-            delay: 1
-          },
-          {
-            id: 105,
-            type: "text",
-            sender: "business",
-            content: "O produto X tem as seguintes características: resistente à água, garantia de 1 ano e está disponível em 3 cores.",
-            delay: 1
-          }
-        ]
-      },
-      {
-        id: 2,
-        title: 'Vendas de Infoprodutos',
-        description: 'Fluxo otimizado para venda de cursos online e produtos digitais',
-        messageCount: 3,
-        platform: 'whatsapp',
-        category: 'vendas',
-        messages: [
-          {
-            id: 1,
-            type: 'text',
-            sender: 'business',
-            content: 'Olá! Obrigado por entrar em contato com a nossa loja. Como posso ajudar?',
-            delay: 0
-          },
-          {
-            id: 2,
-            type: 'text',
-            sender: 'customer',
-            content: 'Olá! Gostaria de saber mais sobre o curso de marketing digital.',
-            delay: 1
-          },
-          {
-            id: 3,
-            type: 'text',
-            sender: 'business',
-            content: 'Claro! Nosso curso de marketing digital é completo, com mais de 40 horas de conteúdo. Você terá acesso a aulas sobre tráfego pago, SEO, redes sociais e mais. O investimento é de R$ 497,00 ou 12x de R$ 49,90.',
-            delay: 2
-          }
-        ]
-      },
-      {
-        id: 3,
-        title: 'Vendas de Produtos Físicos',
-        description: 'Fluxo para lojas online e e-commerces',
-        messageCount: 3,
-        platform: 'whatsapp',
-        category: 'vendas',
-        messages: [
-          {
-            id: 1,
-            type: 'text',
-            sender: 'business',
-            content: 'Olá! Bem-vindo à nossa loja online. Como posso ajudar?',
-            delay: 0
-          },
-          {
-            id: 2,
-            type: 'text',
-            sender: 'customer',
-            content: 'Olá! Vi um produto no site de vocês e gostaria de saber mais detalhes.',
-            delay: 1
-          },
-          {
-            id: 3,
-            type: 'text',
-            sender: 'business',
-            content: 'Com certeza! Qual produto específico chamou sua atenção? Posso te passar todas as informações e condições especiais de pagamento.',
-            delay: 2
-          }
-        ]
-      }
-    ];
-    
+  getTemplates: async () => {
     try {
-      // Tentar obter templates do localStorage
-      const savedTemplates = localStorage.getItem(StorageService.KEYS.TEMPLATES);
-      
-      if (savedTemplates) {
-        const parsedTemplates = JSON.parse(savedTemplates);
-        
-        // Garantir que todos os templates tenham a propriedade messages como array
-        parsedTemplates.forEach(template => {
-          if (!template.messages) {
-            template.messages = [];
-          }
-        });
-        
-        // Salvar no cache
-        StorageService.setCachedData('templates', parsedTemplates);
-        
-        return parsedTemplates;
+      // Verificar cache primeiro
+      const cachedTemplates = StorageService.getCachedData('templates');
+      if (cachedTemplates) {
+        console.log('Usando templates do cache');
+        return cachedTemplates;
       }
       
-      // Se não houver templates salvos, usar os padrões e salvar no localStorage
-      localStorage.setItem(StorageService.KEYS.TEMPLATES, JSON.stringify(defaultTemplates));
+      // Tentar obter da API com token seguro
+      if (SecureStorageService.isTokenValid()) {
+        try {
+          // Obter headers de autenticação usando SecureStorageService
+          const headers = SecureStorageService.getAuthHeaders().headers;
+          
+          const response = await axios.get(`${API_BASE_URL}/templates`, { headers });
+          if (response.data.success) {
+            // Salvar no cache
+            StorageService.setCachedData('templates', response.data.data);
+            return response.data.data;
+          }
+        } catch (apiError) {
+          console.warn('Erro ao buscar templates da API:', apiError);
+          
+          // Verificar se é um erro de autenticação
+          if (apiError.response && apiError.response.status === 401) {
+            // Token inválido ou expirado, limpar token
+            SecureStorageService.clearToken();
+          }
+          
+          // Continuar para fallback
+        }
+      }
+      
+      // Fallback para localStorage
+      console.warn('Fallback: Usando templates do localStorage');
+      const templates = localStorage.getItem(StorageService.KEYS.TEMPLATES);
+      const parsedTemplates = templates ? JSON.parse(templates) : [];
       
       // Salvar no cache
-      StorageService.setCachedData('templates', defaultTemplates);
+      StorageService.setCachedData('templates', parsedTemplates);
       
-      return defaultTemplates;
+      return parsedTemplates;
     } catch (error) {
       console.error('Erro ao obter templates:', error);
-      
-      // Salvar no cache
-      StorageService.setCachedData('templates', defaultTemplates);
-      
-      return defaultTemplates; // Retornar templates padrão em caso de erro
+      // Último fallback
+      const templates = localStorage.getItem(StorageService.KEYS.TEMPLATES);
+      return templates ? JSON.parse(templates) : [];
     }
   },
 
-  // Função para obter um template específico por ID
-  getTemplateById: (id) => {
-    const templates = StorageService.getTemplates();
-    const template = templates.find(template => template.id === parseInt(id));
-    
-    // Garantir que messages seja um array
-    if (template && !template.messages) {
-      template.messages = [];
-    }
-    
-    return template;
-  },
-  
-  // Aplicar um template como base para um novo fluxo
-  applyTemplate: (templateId) => {
+  // Salvar templates
+  saveTemplates: (templates) => {
     try {
-      // Buscar template
-      const templates = StorageService.getTemplates();
-      const template = templates.find(t => t.id === templateId || t.id === Number(templateId));
+      localStorage.setItem(StorageService.KEYS.TEMPLATES, JSON.stringify(templates));
       
-      if (!template) {
-        console.error(`Template com ID ${templateId} não encontrado`);
-        return null;
-      }
+      // Invalidar cache
+      StorageService.invalidateCache('templates');
       
-      // Criar um novo fluxo baseado no template
-      const newFlow = {
-        id: Date.now(),
-        title: template.title || 'Fluxo baseado em template',
-        description: template.description || 'Descrição do fluxo',
-        platform: template.platform || 'whatsapp',
-        createdAt: new Date().toLocaleDateString(),
-        updatedAt: new Date().toLocaleDateString(),
-        // Garantir que messages seja sempre um array
-        messages: template.messages ? [...template.messages] : []
+      return true;
+    } catch (error) {
+      console.error('Erro ao salvar templates:', error);
+      return false;
+    }
+  },
+
+  // === USUÁRIO ===
+  
+  // Salvar dados do usuário
+  saveUser: (user) => {
+    try {
+      localStorage.setItem(StorageService.KEYS.USER, JSON.stringify(user));
+      return true;
+    } catch (error) {
+      console.error('Erro ao salvar usuário:', error);
+      return false;
+    }
+  },
+
+  // Obter dados do usuário
+  getUser: () => {
+    try {
+      const user = localStorage.getItem(StorageService.KEYS.USER);
+      return user ? JSON.parse(user) : null;
+    } catch (error) {
+      console.error('Erro ao obter usuário:', error);
+      return null;
+    }
+  },
+
+  // Limpar dados do usuário
+  clearUser: () => {
+    try {
+      localStorage.removeItem(StorageService.KEYS.USER);
+      
+      // Limpar token usando SecureStorageService
+      SecureStorageService.clearToken();
+      
+      return true;
+    } catch (error) {
+      console.error('Erro ao limpar usuário:', error);
+      return false;
+    }
+  },
+
+  // === ESTATÍSTICAS ===
+  
+  // Obter estatísticas
+  getStats: () => {
+    try {
+      const stats = localStorage.getItem(StorageService.KEYS.STATS);
+      const parsedStats = stats ? JSON.parse(stats) : {
+        flow_create: 0,
+        flow_edit: 0,
+        flow_save: 0,
+        flow_delete: 0,
+        flow_share: 0,
+        flow_view: 0,
+        share_view: 0,
+        lastLoaded: new Date().toLocaleDateString()
       };
       
-      // Atualizar estatísticas
-      StorageService.updateStats('template_use');
-      
-      // Salvar o novo fluxo
-      return StorageService.saveFlow(newFlow);
+      return parsedStats;
     } catch (error) {
-      console.error('Erro ao aplicar template:', error);
+      console.error('Erro ao obter estatísticas:', error);
+      // Retornar estatísticas padrão
+      return {
+        flow_create: 0,
+        flow_edit: 0,
+        flow_save: 0,
+        flow_delete: 0,
+        flow_share: 0,
+        flow_view: 0,
+        share_view: 0,
+        lastLoaded: new Date().toLocaleDateString()
+      };
+    }
+  },
+
+  // Atualizar estatísticas
+  updateStats: (action) => {
+    try {
+      const stats = StorageService.getStats();
+      
+      // Incrementar a ação específica
+      if (stats[action] !== undefined) {
+        stats[action]++;
+      } else {
+        stats[action] = 1;
+      }
+      
+      stats.lastUpdated = new Date().toLocaleDateString();
+      
+      // Salvar no localStorage
+      localStorage.setItem(StorageService.KEYS.STATS, JSON.stringify(stats));
+      
+      return stats;
+    } catch (error) {
+      console.error('Erro ao atualizar estatísticas:', error);
       return null;
     }
   },
 
   // === COMPARTILHAMENTO ===
   
-  // Função para armazenar dados de compartilhamento
+  // Obter fluxos compartilhados
   getSharedFlows: () => {
-    const shared = localStorage.getItem(StorageService.KEYS.SHARED);
-    return shared ? JSON.parse(shared) : {};
-  },
-  
-  // Função para rastrear visualizações de fluxos compartilhados
-  trackFlowView: async (shareId) => {
     try {
-      // Tentar atualizar visualizações na API
-      try {
-        const response = await axios.post(`${API_BASE_URL}/shared-flows/${shareId}/view`);
-        
-        if (response.data.success) {
-          console.log('Visualização registrada na API');
-          return true;
-        }
-      } catch (apiError) {
-        console.warn('Erro ao registrar visualização na API:', apiError);
-        // Continuar para fallback
-      }
-      
-      // Fallback: registrar localmente
-      console.warn('Fallback: Registrando visualização no localStorage');
-      
-      const sharedFlows = StorageService.getSharedFlows();
-      
-      if (sharedFlows[shareId]) {
-        sharedFlows[shareId].views = (sharedFlows[shareId].views || 0) + 1;
-        sharedFlows[shareId].lastViewed = new Date().toISOString();
-        
-        localStorage.setItem(StorageService.KEYS.SHARED, JSON.stringify(sharedFlows));
-        console.log(`Visualização registrada localmente para ${shareId}`);
-        return true;
-      }
-      
-      return false;
+      const shared = localStorage.getItem(StorageService.KEYS.SHARED);
+      return shared ? JSON.parse(shared) : {};
     } catch (error) {
-      console.error('Erro ao registrar visualização:', error);
-      
-      // Último fallback: tentar atualizar apenas no localStorage
-      try {
-        const sharedFlows = localStorage.getItem(StorageService.KEYS.SHARED);
-        const sharedData = sharedFlows ? JSON.parse(sharedFlows) : {};
-        
-        if (sharedData[shareId]) {
-          sharedData[shareId].views = (sharedData[shareId].views || 0) + 1;
-          sharedData[shareId].lastViewed = new Date().toISOString();
-          
-          localStorage.setItem(StorageService.KEYS.SHARED, JSON.stringify(sharedData));
-          return true;
-        }
-        
-        return false;
-      } catch (localError) {
-        console.error('Erro no fallback local:', localError);
-        return false;
-      }
+      console.error('Erro ao obter fluxos compartilhados:', error);
+      return {};
     }
   },
-  
+
+  // Gerar um ID único para compartilhamento
+  generateShareId: () => {
+    // Gerar um ID aleatório de 8 caracteres
+    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    const charactersLength = characters.length;
+    for (let i = 0; i < 8; i++) {
+      result += characters.charAt(Math.floor(Math.random() * charactersLength));
+    }
+    
+    return result;
+  },
+
   // Compartilhar um fluxo
-  shareFlow: async (flowId) => {
+  shareFlow: async (flow) => {
     try {
-      const flow = await StorageService.getFlow(flowId);
-      
-      if (!flow) {
-        console.error(`Fluxo com ID ${flowId} não encontrado para compartilhamento`);
-        return null;
-      }
-      
-      // Tentar compartilhar na API
-      const token = StorageService.getAuthToken();
-      if (token) {
+      // Tentar compartilhar via API se o token for válido
+      if (SecureStorageService.isTokenValid()) {
         try {
-          const response = await axios.post(`${API_BASE_URL}/shared-flows`, 
-            { flowId }, 
-            {
-              headers: {
-                'Authorization': `Bearer ${token}`
-              }
-            }
-          );
+          // Preparar dados para compartilhamento
+          const shareData = {
+            flowId: flow.id,
+            isPublic: true
+          };
+          
+          // Obter headers de autenticação usando SecureStorageService
+          const headers = SecureStorageService.getAuthHeaders().headers;
+          
+          const response = await axios.post(`${API_BASE_URL}/shared-flows`, shareData, { headers });
           
           if (response.data.success) {
             // Atualizar estatísticas
             StorageService.updateStats('flow_share');
             
-            return response.data.data;
+            // Retornar dados do compartilhamento
+            const shareUrl = `${window.location.origin}/shared/${response.data.data.shareId}`;
+            return {
+              success: true,
+              shareId: response.data.data.shareId,
+              shareUrl
+            };
           }
         } catch (apiError) {
-          console.warn('Erro ao compartilhar fluxo na API:', apiError);
+          console.warn('Erro ao compartilhar fluxo via API:', apiError);
+          
+          // Verificar se é um erro de autenticação
+          if (apiError.response && apiError.response.status === 401) {
+            // Token inválido ou expirado, limpar token
+            SecureStorageService.clearToken();
+          }
+          
           // Continuar para fallback
         }
       }
       
       // Fallback: compartilhar localmente
-      console.warn('Fallback: Compartilhando fluxo no localStorage');
+      console.warn('Fallback: Compartilhando fluxo localmente');
       
-      // Gerar um ID único para o compartilhamento
-      const shareId = `share_${Date.now()}`;
+      // Gerar ID de compartilhamento
+      const shareId = StorageService.generateShareId();
       
-      // Obter dados de compartilhamento existentes
+      // Obter fluxos compartilhados existentes
       const sharedFlows = StorageService.getSharedFlows();
       
       // Adicionar novo compartilhamento
       sharedFlows[shareId] = {
-        id: shareId,
         flow: flow,
         createdAt: new Date().toISOString(),
         views: 0
@@ -992,321 +968,124 @@ const StorageService = {
       // Atualizar estatísticas
       StorageService.updateStats('flow_share');
       
-      return sharedFlows[shareId];
+      // Construir URL de compartilhamento
+      const shareUrl = `${window.location.origin}/shared/${shareId}`;
+      
+      return {
+        success: true,
+        shareId,
+        shareUrl
+      };
     } catch (error) {
       console.error('Erro ao compartilhar fluxo:', error);
+      return {
+        success: false,
+        error: 'Não foi possível compartilhar o fluxo'
+      };
+    }
+  },
+
+  // Obter um fluxo compartilhado pelo ID
+  getSharedFlow: async (shareId) => {
+    try {
+      // Verificar cache primeiro
+      const cachedSharedFlow = StorageService.getCachedData(`shared_flow_${shareId}`);
+      if (cachedSharedFlow) {
+        console.log(`Usando fluxo compartilhado ${shareId} do cache`);
+        return cachedSharedFlow;
+      }
       
-      // Último fallback: tentar compartilhar apenas no localStorage
+      // Tentar obter da API
       try {
-        const flow = await StorageService.getFlow(flowId);
+        const response = await axios.get(`${API_BASE_URL}/shared-flows/${shareId}`);
+        if (response.data.success) {
+          // Salvar no cache
+          StorageService.setCachedData(`shared_flow_${shareId}`, response.data.data);
+          
+          // Registrar visualização
+          try {
+            await axios.post(`${API_BASE_URL}/shared-flows/${shareId}/view`);
+          } catch (viewError) {
+            console.warn('Erro ao registrar visualização:', viewError);
+          }
+          
+          return response.data.data;
+        }
+      } catch (apiError) {
+        console.warn('Erro ao buscar fluxo compartilhado da API:', apiError);
+        // Continuar para fallback
+      }
+      
+      // Fallback: buscar localmente
+      console.warn('Fallback: Buscando fluxo compartilhado localmente');
+      
+      const sharedFlows = StorageService.getSharedFlows();
+      const sharedFlow = sharedFlows[shareId];
+      
+      if (sharedFlow) {
+        // Incrementar contagem de visualizações
+        sharedFlow.views = (sharedFlow.views || 0) + 1;
+        localStorage.setItem(StorageService.KEYS.SHARED, JSON.stringify(sharedFlows));
         
-        if (!flow) return null;
+        // Atualizar estatísticas
+        StorageService.updateStats('share_view');
         
-        const shareId = `share_${Date.now()}`;
-        const sharedFlows = localStorage.getItem(StorageService.KEYS.SHARED);
-        const sharedData = sharedFlows ? JSON.parse(sharedFlows) : {};
+        // Salvar no cache
+        StorageService.setCachedData(`shared_flow_${shareId}`, sharedFlow);
         
-        sharedData[shareId] = {
-          id: shareId,
-          flow: flow,
-          createdAt: new Date().toISOString(),
-          views: 0
-        };
-        
-        localStorage.setItem(StorageService.KEYS.SHARED, JSON.stringify(sharedData));
-        
-        return sharedData[shareId];
+        return sharedFlow;
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Erro ao obter fluxo compartilhado:', error);
+      // Último fallback
+      try {
+        const sharedFlows = StorageService.getSharedFlows();
+        return sharedFlows[shareId] || null;
       } catch (localError) {
         console.error('Erro no fallback local:', localError);
         return null;
       }
     }
   },
-  
-  // Parar de compartilhar um fluxo
-  unshareFlow: async (shareId) => {
+
+  // Incrementar visualizações de um fluxo compartilhado
+  incrementSharedFlowViews: async (shareId) => {
     try {
-      // Tentar remover compartilhamento na API
-      const token = StorageService.getAuthToken();
-      if (token) {
-        try {
-          const response = await axios.delete(`${API_BASE_URL}/shared-flows/${shareId}`, {
-            headers: {
-              'Authorization': `Bearer ${token}`
-            }
-          });
-          
-          if (response.data.success) {
-            return true;
-          }
-        } catch (apiError) {
-          console.warn('Erro ao remover compartilhamento na API:', apiError);
-          // Continuar para fallback
-        }
+      // Tentar incrementar na API
+      try {
+        await axios.post(`${API_BASE_URL}/shared-flows/${shareId}/view`);
+        return true;
+      } catch (apiError) {
+        console.warn('Erro ao incrementar visualizações na API:', apiError);
+        // Continuar para fallback
       }
       
-      // Fallback: remover localmente
-      console.warn('Fallback: Removendo compartilhamento do localStorage');
+      // Fallback: incrementar localmente
+      console.warn('Fallback: Incrementando visualizações localmente');
       
       const sharedFlows = StorageService.getSharedFlows();
+      const sharedFlow = sharedFlows[shareId];
       
-      if (sharedFlows[shareId]) {
-        delete sharedFlows[shareId];
+      if (sharedFlow) {
+        // Incrementar contagem de visualizações
+        sharedFlow.views = (sharedFlow.views || 0) + 1;
         localStorage.setItem(StorageService.KEYS.SHARED, JSON.stringify(sharedFlows));
+        
+        // Atualizar estatísticas
+        StorageService.updateStats('share_view');
+        
+        // Invalidar cache
+        StorageService.invalidateCache(`shared_flow_${shareId}`);
+        
         return true;
       }
       
       return false;
     } catch (error) {
-      console.error('Erro ao remover compartilhamento:', error);
-      
-      // Último fallback: tentar remover apenas no localStorage
-      try {
-        const sharedFlows = localStorage.getItem(StorageService.KEYS.SHARED);
-        const sharedData = sharedFlows ? JSON.parse(sharedFlows) : {};
-        
-        if (sharedData[shareId]) {
-          delete sharedData[shareId];
-          localStorage.setItem(StorageService.KEYS.SHARED, JSON.stringify(sharedData));
-          return true;
-        }
-        
-        return false;
-      } catch (localError) {
-        console.error('Erro no fallback local:', localError);
-        return false;
-      }
-    }
-  },
-  
-  // === ESTATÍSTICAS ===
-  
-  // Obter estatísticas de uso
-  getStats: () => {
-    try {
-      const defaultStats = {
-        flows_created: 0,
-        flows_edited: 0,
-        flows_deleted: 0,
-        flows_shared: 0,
-        templates_used: 0,
-        last_active: new Date().toISOString()
-      };
-      
-      // Verificar cache primeiro
-      const cachedStats = StorageService.getCachedData('stats');
-      if (cachedStats) {
-        console.log('Usando estatísticas do cache');
-        return cachedStats;
-      }
-      
-      // Tentar obter do localStorage
-      const stats = localStorage.getItem(StorageService.KEYS.STATS);
-      const parsedStats = stats ? JSON.parse(stats) : defaultStats;
-      
-      // Salvar no cache
-      StorageService.setCachedData('stats', parsedStats);
-      
-      return parsedStats;
-    } catch (error) {
-      console.error('Erro ao obter estatísticas:', error);
-      
-      // Retornar estatísticas padrão em caso de erro
-      const defaultStats = {
-        flows_created: 0,
-        flows_edited: 0,
-        flows_deleted: 0,
-        flows_shared: 0,
-        templates_used: 0,
-        last_active: new Date().toISOString()
-      };
-      
-      // Salvar no cache
-      StorageService.setCachedData('stats', defaultStats);
-      
-      return defaultStats;
-    }
-  },
-  
-  // Atualizar estatísticas
-  updateStats: (action) => {
-    try {
-      const stats = StorageService.getStats();
-      
-      // Atualizar estatística específica com base na ação
-      switch (action) {
-        case 'flow_save':
-          stats.flows_created = (stats.flows_created || 0) + 1;
-          break;
-        case 'flow_edit':
-          stats.flows_edited = (stats.flows_edited || 0) + 1;
-          break;
-        case 'flow_delete':
-          stats.flows_deleted = (stats.flows_deleted || 0) + 1;
-          break;
-        case 'flow_share':
-          stats.flows_shared = (stats.flows_shared || 0) + 1;
-          break;
-        case 'template_use':
-          stats.templates_used = (stats.templates_used || 0) + 1;
-          break;
-        default:
-          break;
-      }
-      
-      // Atualizar última atividade
-      stats.last_active = new Date().toISOString();
-      
-      // Salvar no localStorage
-      localStorage.setItem(StorageService.KEYS.STATS, JSON.stringify(stats));
-      
-      // Invalidar cache de estatísticas
-      StorageService.invalidateCache('stats');
-      
-      return stats;
-    } catch (error) {
-      console.error('Erro ao atualizar estatísticas:', error);
-      return null;
-    }
-  },
-  
-  // === AUTENTICAÇÃO ===
-  
-  // Registrar um novo usuário
-  register: async (userData) => {
-    try {
-      const response = await axios.post(`${API_BASE_URL}/auth/register`, userData);
-      
-      if (response.data.success) {
-        // Salvar token no localStorage
-        localStorage.setItem('token', response.data.token);
-        
-        // Salvar informações básicas do usuário
-        localStorage.setItem(StorageService.KEYS.USER, JSON.stringify({
-          id: response.data.user.id,
-          name: response.data.user.name,
-          email: response.data.user.email,
-          createdAt: response.data.user.createdAt
-        }));
-        
-        return response.data;
-      }
-      
-      return null;
-    } catch (error) {
-      console.error('Erro ao registrar usuário:', error);
-      return { success: false, error: error.response?.data?.message || 'Erro ao registrar usuário' };
-    }
-  },
-  
-  // Login de usuário
-  login: async (credentials) => {
-    try {
-      const response = await axios.post(`${API_BASE_URL}/auth/login`, credentials);
-      
-      if (response.data.success) {
-        // Salvar token no localStorage
-        localStorage.setItem('token', response.data.token);
-        
-        // Salvar informações básicas do usuário
-        localStorage.setItem(StorageService.KEYS.USER, JSON.stringify({
-          id: response.data.user.id,
-          name: response.data.user.name,
-          email: response.data.user.email,
-          createdAt: response.data.user.createdAt
-        }));
-        
-        // Invalidar todos os caches para recarregar dados do servidor
-        StorageService.invalidateCache('flows');
-        StorageService.invalidateCache('templates');
-        StorageService.invalidateCache('stats');
-        
-        return response.data;
-      }
-      
-      return null;
-    } catch (error) {
-      console.error('Erro ao fazer login:', error);
-      return { success: false, error: error.response?.data?.message || 'Erro ao fazer login' };
-    }
-  },
-  
-  // Logout de usuário
-  logout: () => {
-    try {
-      // Remover token
-      localStorage.removeItem('token');
-      
-      // Remover dados do usuário
-      localStorage.removeItem(StorageService.KEYS.USER);
-      
-      // Invalidar todos os caches
-      StorageService.invalidateCache('flows');
-      StorageService.invalidateCache('templates');
-      StorageService.invalidateCache('stats');
-      
-      return true;
-    } catch (error) {
-      console.error('Erro ao fazer logout:', error);
+      console.error('Erro ao incrementar visualizações:', error);
       return false;
-    }
-  },
-  
-  // Obter informações do usuário atual
-  getCurrentUser: async () => {
-    try {
-      // Verificar cache primeiro
-      const cachedUser = StorageService.getCachedData('current_user');
-      if (cachedUser) {
-        console.log('Usando usuário do cache');
-        return cachedUser;
-      }
-      
-      // Verificar se há token
-      const token = StorageService.getAuthToken();
-      if (!token) {
-        return null;
-      }
-      
-      // Tentar obter da API
-      try {
-        const response = await axios.get(`${API_BASE_URL}/auth/me`, {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        });
-        
-        if (response.data.success) {
-          // Salvar no cache
-          StorageService.setCachedData('current_user', response.data.user);
-          
-          // Atualizar no localStorage também
-          localStorage.setItem(StorageService.KEYS.USER, JSON.stringify(response.data.user));
-          
-          return response.data.user;
-        }
-      } catch (apiError) {
-        console.warn('Erro ao obter usuário da API:', apiError);
-        // Continuar para fallback
-      }
-      
-      // Fallback: obter do localStorage
-      console.warn('Fallback: Obtendo usuário do localStorage');
-      
-      const userData = localStorage.getItem(StorageService.KEYS.USER);
-      if (!userData) {
-        return null;
-      }
-      
-      const user = JSON.parse(userData);
-      
-      // Salvar no cache
-      StorageService.setCachedData('current_user', user);
-      
-      return user;
-    } catch (error) {
-      console.error('Erro ao obter usuário atual:', error);
-      return null;
     }
   }
 };
