@@ -1,7 +1,7 @@
 // src/layout/MainLayout.js
 import React from 'react';
 import { Sidebar, Navbar } from '../design-system';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth } from '../context/AuthContext';
 
 const MainLayout = ({ children, title = "Dashboard" }) => {
   const { user, logout, getPlanDetails } = useAuth();

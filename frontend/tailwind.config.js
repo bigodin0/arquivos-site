@@ -1,17 +1,13 @@
+// tailwind.config.js (corrigido)
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   content: [
     "./src/**/*.{js,jsx,ts,tsx}",
+    "./public/index.html",
   ],
   theme: {
     extend: {
       colors: {
-        // Cores antigas (mantidas para compatibilidade durante a transição)
-        'primary-old': '#0EA47A',
-        'primary-dark-old': '#0B8C6C',
-        'secondary-old': '#F5F7FF',
-        'simulachat-whatsapp': '#25D366',
-        
         // Nova paleta premium - Teal & Grey
         'primary': {
           DEFAULT: '#00A19D',
@@ -63,7 +59,13 @@ module.exports = {
         'bg': {
           dark: '#EDF2F7',
           light: '#F7FAFC',
-        }
+        },
+        
+        // Cores de plataformas
+        'whatsapp': '#25D366',
+        'messenger': '#0084FF',
+        'instagram': '#E1306C',
+        'telegram': '#0088cc'
       },
       fontFamily: {
         'sans': ['"Inter"', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
@@ -127,4 +129,26 @@ module.exports = {
     },
   },
   plugins: [],
+  safelist: [
+    // Adicionar classes que podem ser geradas dinamicamente
+    'bg-whatsapp',
+    'bg-messenger',
+    'bg-instagram',
+    'bg-telegram',
+    'text-whatsapp',
+    'text-messenger', 
+    'text-instagram',
+    'text-telegram',
+    'line-clamp-1',
+    'line-clamp-2',
+    'line-clamp-3',
+    'animate-fade-in',
+    'animate-slide-up',
+    {
+      pattern: /bg-(primary|secondary|success|warning|error|teal|grey)(-\d+)?/,
+    },
+    {
+      pattern: /text-(primary|secondary|success|warning|error|teal|grey)(-\d+)?/,
+    },
+  ],
 }

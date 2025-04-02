@@ -6,7 +6,7 @@ import ChatPreview from '../components/ChatPreview';
 import axios from 'axios';
 import apiConfig from '../config/api';
 import { Loader, MessageSquare, AlertTriangle } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth } from '../context/AuthContext';
 
 const SharedFlowPreview = () => {
   const [flow, setFlow] = useState(null);

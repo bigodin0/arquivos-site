@@ -7,7 +7,7 @@ import SecureStorageService from '../services/secureStorage';
 import { MainLayout, Container, Card, Button } from '../design-system';
 import axios from 'axios';
 import apiConfig from '../config/api';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth } from '../context/AuthContext';
 
 const FlowPreview = ({ shared = false }) => {
   const { id, shareCode } = useParams();

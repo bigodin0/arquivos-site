@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Search, Bell, ChevronDown, ExternalLink, Settings, LogOut, User } from 'lucide-react';
-import SecureStorageService from '../../services/secureStorage';
+import SecureStorageService from '../../../services/secureStorage';
 
 /**
  * Navbar premium com design elegante usando a paleta teal & cinza

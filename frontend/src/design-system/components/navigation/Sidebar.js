@@ -11,9 +11,10 @@ import {
   ChevronRight, 
   User,
   Menu,
-  X
+  X,
+  File
 } from 'lucide-react';
-import SecureStorageService from '../../services/secureStorage';
+import SecureStorageService from '../../../services/secureStorage';
 
 /**
  * Sidebar premium com design elegante usando a paleta teal & cinza
@@ -59,10 +60,10 @@ const Sidebar = ({
       icon: <CreditCard size={20} /> 
     },
     { 
-      id: 'settings', 
-      path: '/settings', 
-      label: 'Configurações', 
-      icon: <Settings size={20} />,
+      id: 'files', 
+      path: '/files', 
+      label: 'Arquivos', 
+      icon: <File size={20} />,
       divider: true
     }
   ];

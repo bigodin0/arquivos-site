@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { PlusIcon, LayoutTemplate } from 'lucide-react';
 import StorageService from '../services/storage';
 import SecureStorageService from '../services/secureStorage';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth } from '../context/AuthContext';
 import { MainLayout, Container, Grid, Button, FlowCard } from '../design-system';
+import LoadingSpinner from '../components/common/LoadingSpinner';
 import axios from 'axios';
 import apiConfig from '../config/api';
 
@@ -91,15 +92,23 @@ const Dashboard = () => {
   };
 
   const handleDuplicateFlow = (flow) => {
+    // Verificação de segurança para garantir que flow existe
+    if (!flow) {
+      console.error('Tentativa de duplicar um fluxo inexistente');
+      return;
+    }
+    
     const duplicatedFlow = {
       ...flow,
       title: `${flow.title} (Cópia)`,
       id: null, // Será gerado um novo ID
-      messages: [...flow.messages]
+      messages: Array.isArray(flow.messages) ? [...flow.messages] : []
     };
 
     const saved = StorageService.saveFlow(duplicatedFlow);
-    setFlows((prevFlows) => [...prevFlows, saved]);
+    // Verificar se flows é um array antes de usar spread
+    const updatedFlows = Array.isArray(flows) ? [...flows, saved] : [saved];
+    setFlows(updatedFlows);
   };
 
   // Função para criar um fluxo vazio
@@ -118,7 +127,11 @@ const Dashboard = () => {
       };
       
       const savedFlow = StorageService.saveFlow(newFlow);
-      setFlows((prevFlows) => [...prevFlows, savedFlow]);
+      
+      // Verificar se flows é um array antes de usar spread
+      const updatedFlows = Array.isArray(flows) ? [...flows, savedFlow] : [savedFlow];
+      setFlows(updatedFlows);
+      
       navigate(`/flow/${savedFlow.id}`);
     } else {
       alert(`Seu plano atual (${currentPlan.name}) permite apenas ${currentPlan.flowsLimit} fluxos. Atualize seu plano para criar mais fluxos.`);
@@ -143,7 +156,7 @@ const Dashboard = () => {
     if (loading) {
       return (
         <div className="bg-white rounded-lg border border-gray-200 p-8 text-center">
-          <p>Carregando fluxos...</p>
+          <LoadingSpinner size="lg" text="Carregando fluxos..." />
         </div>
       );
     }
@@ -163,7 +176,7 @@ const Dashboard = () => {
       );
     }
     
-    if (!flows || flows.length === 0) {
+    if (!flows || !Array.isArray(flows) || flows.length === 0) {
       return (
         <div className="bg-white rounded-lg border border-gray-200 p-8 text-center">
           <div className="max-w-md mx-auto">

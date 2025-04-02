@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MessageSquare, CreditCard, ArrowRight } from 'lucide-react';
 import { Button, TextField } from '../design-system';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
 import apiConfig from '../config/api';
 import StorageService from '../services/storage';

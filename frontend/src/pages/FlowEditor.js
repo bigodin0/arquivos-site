@@ -17,7 +17,7 @@ import {
   Loader,
   Copy 
 } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth } from '../context/AuthContext';
 import StorageService from '../services/storage';
 import SecureStorageService from '../services/secureStorage';
 import axios from 'axios';
@@ -52,6 +52,7 @@ const FlowEditor = () => {
   const [editIndex, setEditIndex] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saveTimeoutId, setSaveTimeoutId] = useState(null);
+  const [buttonsConfig, setButtonsConfig] = useState([]);
   
   // Obtendo detalhes do plano no nível do componente
   const currentPlan = getPlanDetails();
@@ -114,6 +115,9 @@ const FlowEditor = () => {
         const loadedFlow = StorageService.getFlow(id);
         
         if (loadedFlow) {
+          // Garantir que o ID da URL seja atribuído ao fluxo
+          loadedFlow.id = id;
+          
           setFlow(loadedFlow);
           setOriginalTitle(loadedFlow.title || '');
           setSelectedPlatform(loadedFlow.platform || 'whatsapp');
@@ -128,6 +132,21 @@ const FlowEditor = () => {
             setShareLink('#');
             setEmbedLink('#');
           }
+        } else {
+          // Se não existe um fluxo com este ID, criar um novo
+          const newFlow = {
+            id: id,
+            title: 'Novo Fluxo',
+            description: 'Descrição do seu novo fluxo',
+            platform: 'whatsapp',
+            messages: [],
+            createdAt: new Date().toLocaleDateString(),
+            updatedAt: new Date().toLocaleDateString()
+          };
+          
+          setFlow(newFlow);
+          setOriginalTitle(newFlow.title);
+          setSelectedPlatform(newFlow.platform);
         }
         
         // Verificar se o token é válido
@@ -142,6 +161,9 @@ const FlowEditor = () => {
             
             if (response.data && response.data.success) {
               const flowData = response.data.data;
+              
+              // Garantir que o ID da URL seja atribuído ao fluxo
+              flowData.id = id;
               
               // Garantir que flowData.messages seja um array
               if (!flowData.messages) {
@@ -289,9 +311,15 @@ const FlowEditor = () => {
         flow.messages = [];
       }
       
+      // Garantir que o ID seja definido
+      if (!flow.id) {
+        flow.id = id;
+      }
+      
       // Atualizar contagens
       const updatedFlow = {
         ...flow,
+        id: id, // Garantir que o ID está explicitamente definido
         platform: selectedPlatform,
         messageCount: Array.isArray(flow.messages) ? flow.messages.length : 0,
         updatedAt: new Date().toLocaleDateString(),
@@ -302,7 +330,6 @@ const FlowEditor = () => {
       
       // Verificar se o token é válido antes de tentar usar a API
       if (SecureStorageService.isTokenValid()) {
-        // Tentar salvar na API
         try {
           const headers = SecureStorageService.getAuthHeaders().headers;
           
@@ -317,7 +344,7 @@ const FlowEditor = () => {
           }
         } catch (apiError) {
           console.error("Erro ao salvar na API:", apiError);
-          // Já temos o fallback local acima
+          // Já temos o fallback do localStorage acima
           
           // Verificar se é erro de token inválido
           if (apiError.response && apiError.response.status === 401) {
@@ -346,6 +373,27 @@ const FlowEditor = () => {
     }
   }, [flow, id, selectedPlatform]);
 
+  const handleAddButtonOption = () => {
+    setButtonsConfig([...buttonsConfig, { 
+      id: Date.now(),
+      text: '',
+      responseMessage: '',
+      jumpTo: ''
+    }]);
+  };
+
+  const handleUpdateButtonConfig = (index, field, value) => {
+    const updatedButtons = [...buttonsConfig];
+    updatedButtons[index][field] = value;
+    setButtonsConfig(updatedButtons);
+  };
+
+  const handleRemoveButtonOption = (index) => {
+    const updatedButtons = [...buttonsConfig];
+    updatedButtons.splice(index, 1);
+    setButtonsConfig(updatedButtons);
+  };
+
   const handleAddMessage = useCallback(() => {
     // Validação da nova mensagem
     const msgErrors = {};
@@ -356,10 +404,15 @@ const FlowEditor = () => {
     }
     
     // Adicionar mensagem
-    const message = {
+    let messageToAdd = {
       id: Date.now(),
       ...newMessage
     };
+    
+    // Adicionar botões se o tipo for 'buttons'
+    if (newMessage.type === 'buttons' && buttonsConfig.length > 0) {
+      messageToAdd.buttons = buttonsConfig;
+    }
     
     // Garantir que flow e flow.messages sejam válidos
     if (!flow) {
@@ -372,7 +425,7 @@ const FlowEditor = () => {
     
     setFlow(prevFlow => ({
       ...prevFlow,
-      messages: [...currentMessages, message]
+      messages: [...currentMessages, messageToAdd]
     }));
     
     // Resetar
@@ -382,13 +435,14 @@ const FlowEditor = () => {
       content: '', 
       delay: 0 
     });
+    setButtonsConfig([]);
     setErrors({});
     
     // Salvar automaticamente após adicionar a mensagem
     setTimeout(() => {
       handleSaveFlow();
     }, 500);
-  }, [newMessage, flow, handleSaveFlow]);
+  }, [newMessage, flow, buttonsConfig, handleSaveFlow]);
 
   const handleUpdateMessage = useCallback(() => {
     if (!newMessage.content.trim()) {
@@ -396,15 +450,22 @@ const FlowEditor = () => {
       return;
     }
     
+    let updatedMessage = {
+      ...flow.messages[editIndex],
+      content: newMessage.content,
+      sender: newMessage.sender,
+      delay: newMessage.delay,
+      type: newMessage.type
+    };
+    
+    // Adicionar botões se o tipo for 'buttons'
+    if (newMessage.type === 'buttons') {
+      updatedMessage.buttons = buttonsConfig;
+    }
+    
     setFlow(prevFlow => {
       const updatedMessages = [...prevFlow.messages];
-      updatedMessages[editIndex] = {
-        ...updatedMessages[editIndex],
-        content: newMessage.content,
-        sender: newMessage.sender,
-        delay: newMessage.delay,
-        type: newMessage.type
-      };
+      updatedMessages[editIndex] = updatedMessage;
       
       return {
         ...prevFlow,
@@ -419,10 +480,16 @@ const FlowEditor = () => {
       content: '', 
       delay: 0 
     });
+    setButtonsConfig([]);
     setEditMode(null);
     setEditIndex(null);
     setErrors({});
-  }, [newMessage, editIndex]);
+    
+    // Salvar após atualizar
+    setTimeout(() => {
+      handleSaveFlow();
+    }, 500);
+  }, [newMessage, editIndex, flow?.messages, buttonsConfig, handleSaveFlow]);
 
   const handleEditMessage = useCallback((index) => {
     const message = flow.messages[index];
@@ -432,6 +499,14 @@ const FlowEditor = () => {
       content: message.content,
       delay: message.delay
     });
+    
+    // Carregar config de botões se for uma mensagem de botões
+    if (message.type === 'buttons' && Array.isArray(message.buttons)) {
+      setButtonsConfig(message.buttons);
+    } else {
+      setButtonsConfig([]);
+    }
+    
     setEditMode('edit');
     setEditIndex(index);
   }, [flow?.messages]);
@@ -442,8 +517,13 @@ const FlowEditor = () => {
         ...prevFlow,
         messages: prevFlow.messages.filter(msg => msg.id !== id)
       }));
+      
+      // Salvar após deletar
+      setTimeout(() => {
+        handleSaveFlow();
+      }, 500);
     }
-  }, []);
+  }, [handleSaveFlow]);
 
   const handleCopyLink = useCallback(async (type = 'share') => {
     try {
@@ -502,7 +582,20 @@ const FlowEditor = () => {
             )}
           </div>
           
-          <div className="text-sm break-words">{message.content}</div>
+          <div className="text-sm break-words">
+            {message.type === 'buttons' && Array.isArray(message.buttons) ? (
+              <div>
+                <p className="mb-2">{message.content}</p>
+                <div className="space-y-1">
+                  {message.buttons.map((button, btnIndex) => (
+                    <div key={btnIndex} className="bg-gray-100 text-gray-800 p-1 rounded text-xs text-center">
+                      {button.text}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : message.content}
+          </div>
           
           {/* Ações da mensagem - aparecem no hover */}
           <div className="absolute -top-3 -right-3 hidden group-hover:flex space-x-1">
@@ -590,6 +683,76 @@ const FlowEditor = () => {
     };
   }, [flow?.messages]);
 
+  // Renderizar configuração de botões
+  const renderButtonsConfig = () => {
+    if (newMessage.type !== 'buttons') return null;
+    
+    return (
+      <div className="mt-4 border-t pt-4">
+        <div className="flex justify-between items-center mb-4">
+          <h4 className="font-medium text-gray-700">Configuração de Botões</h4>
+          <Button
+            variant="outline"
+            onClick={handleAddButtonOption}
+            icon={<Plus size={16} />}
+            size="sm"
+          >
+            Adicionar Botão
+          </Button>
+        </div>
+        
+        {buttonsConfig.length === 0 ? (
+          <div className="text-center py-3 bg-gray-50 rounded-lg">
+            <p className="text-gray-500 text-sm">Adicione botões para sua mensagem</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {buttonsConfig.map((button, index) => (
+              <div key={index} className="p-3 border rounded-lg bg-gray-50">
+                <div className="flex justify-between mb-2">
+                  <h5 className="text-sm font-medium">Botão {index + 1}</h5>
+                  <button
+                    onClick={() => handleRemoveButtonOption(index)}
+                    className="text-red-500 hover:text-red-700"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+                
+                <div className="space-y-3">
+                  <TextField
+                    label="Texto do botão"
+                    value={button.text}
+                    onChange={(e) => handleUpdateButtonConfig(index, 'text', e.target.value)}
+                    placeholder="Ex: Sim, quero comprar"
+                    size="sm"
+                  />
+                  
+                  <TextField
+                    label="Mensagem de resposta (opcional)"
+                    value={button.responseMessage}
+                    onChange={(e) => handleUpdateButtonConfig(index, 'responseMessage', e.target.value)}
+                    placeholder="Resposta do cliente ao clicar"
+                    size="sm"
+                  />
+                  
+                  <TextField
+                    label="Pular para (opcional)"
+                    value={button.jumpTo}
+                    onChange={(e) => handleUpdateButtonConfig(index, 'jumpTo', e.target.value)}
+                    placeholder="ID da mensagem para pular"
+                    helperText="Deixe em branco para continuar a sequência normal"
+                    size="sm"
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   if (loading) {
     return (
       <MainLayout>
@@ -610,8 +773,8 @@ const FlowEditor = () => {
       <MainLayout>
         <Container>
           <div className="flex flex-col items-center justify-center h-[60vh]">
-            <div className="bg-red-50 border border-red-200 p-6 rounded-lg text-center max-w-md">
-              <AlertTriangle size={40} className="text-red-500 mx-auto mb-4" />
+            <div className="bg-white rounded-lg shadow-lg p-8 max-w-md w-full text-center">
+              <AlertTriangle size={40} className="mx-auto text-amber-500 mb-4" />
               <h2 className="text-xl font-semibold text-gray-800 mb-2">Erro ao carregar fluxo</h2>
               <p className="text-gray-600 mb-4">{error}</p>
               <Button 
@@ -795,7 +958,8 @@ const FlowEditor = () => {
                       <label className="text-xs font-medium text-gray-700 mb-1">Atraso (seg)</label>
                       <input
                         type="number"
-                        min="0"value={newMessage.delay}
+                        min="0"
+                        value={newMessage.delay}
                         onChange={(e) => setNewMessage({...newMessage, delay: parseInt(e.target.value) || 0})}
                         className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-teal-500 focus:border-teal-500"
                       />
@@ -811,6 +975,9 @@ const FlowEditor = () => {
                     error={errors.content}
                     className="w-full mb-3"
                   />
+                  
+                  {/* Renderizar configuração de botões se o tipo for 'buttons' */}
+                  {renderButtonsConfig()}
 
                   <div className="flex justify-end space-x-2">
                     {editMode === 'edit' ? (
@@ -824,6 +991,7 @@ const FlowEditor = () => {
                               content: '',
                               delay: 0
                             });
+                            setButtonsConfig([]);
                             setEditMode(null);
                             setEditIndex(null);
                           }}

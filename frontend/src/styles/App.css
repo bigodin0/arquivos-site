@@ -1,5 +1,30 @@
 /* Estilos responsivos para o SimulaChat */
 
+/* Cores principais */
+:root {
+  --primary: #00A19D;
+  --primary-dark: #00817E;
+  --primary-light: #CCEFEF;
+  --secondary: #708091;
+  --text-dark: #2D3748;
+  --text-medium: #4A5568;
+  --text-light: #718096;
+  --success: #00B894;
+  --warning: #FDCB6E;
+  --error: #FF7675;
+  --whatsapp: #25D366;
+  --messenger: #0084FF;
+  --instagram: #E1306C;
+  --telegram: #0088cc;
+}
+
+/* Container principal da aplicação */
+.app-container {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
 /* Interface adaptativa para botões em dispositivos touchscreen */
 @media (max-width: 768px) {
   /* Aumentar áreas de toque para todos os botões */
@@ -47,7 +72,7 @@ input:focus,
 select:focus,
 textarea:focus,
 a:focus {
-  outline: 2px solid theme('colors.primary');
+  outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
 
@@ -162,32 +187,40 @@ textarea::placeholder {
 
 /* Cores padrão para plataformas */
 .text-whatsapp {
-  color: #25D366;
+  color: var(--whatsapp);
 }
 
 .text-instagram {
-  color: #E1306C;
+  color: var(--instagram);
 }
 
 .text-messenger {
-  color: #0084FF;
+  color: var(--messenger);
+}
+
+.text-telegram {
+  color: var(--telegram);
 }
 
 .bg-whatsapp {
-  background-color: #25D366;
+  background-color: var(--whatsapp);
 }
 
 .bg-instagram {
-  background-color: #E1306C;
+  background-color: var(--instagram);
 }
 
 .bg-messenger {
-  background-color: #0084FF;
+  background-color: var(--messenger);
+}
+
+.bg-telegram {
+  background-color: var(--telegram);
 }
 
 /* Definições específicas para o SimulaChat */
 .bg-simulachat-whatsapp {
-  background-color: #25D366;
+  background-color: var(--whatsapp);
 }
 
 /* Melhorias de acessibilidade */
@@ -207,7 +240,7 @@ textarea::placeholder {
 a:not([class]),
 .link {
   text-decoration: none;
-  color: theme('colors.primary');
+  color: var(--primary);
   transition: color 0.2s ease;
 }
 
@@ -272,4 +305,229 @@ a:not([class]):hover,
     transform: translateY(0);
     opacity: 1;
   }
+}
+
+/* Estilos específicos para o SimulaChat */
+/* Hero Section */
+.simulachat-hero {
+  background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+  color: white;
+  padding: 5rem 0;
+}
+
+/* Botões personalizados */
+.btn-primary {
+  background-color: var(--primary);
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 0.375rem;
+  font-weight: 500;
+  transition: background-color 0.2s;
+}
+
+.btn-primary:hover {
+  background-color: var(--primary-dark);
+}
+
+.btn-outline {
+  background-color: transparent;
+  color: var(--primary);
+  border: 1px solid var(--primary);
+  padding: 0.5rem 1rem;
+  border-radius: 0.375rem;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.btn-outline:hover {
+  background-color: var(--primary-light);
+  border-color: var(--primary-dark);
+}
+
+/* Cards */
+.simulachat-card {
+  background-color: white;
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  transition: box-shadow 0.3s, transform 0.3s;
+}
+
+.simulachat-card:hover {
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  transform: translateY(-2px);
+}
+
+/* Chat interfaces */
+.chat-bubble {
+  padding: 0.75rem 1rem;
+  border-radius: 1rem;
+  max-width: 80%;
+  margin-bottom: 0.5rem;
+  position: relative;
+}
+
+.chat-bubble-customer {
+  background-color: var(--whatsapp);
+  color: white;
+  margin-left: auto;
+  border-bottom-right-radius: 0;
+}
+
+.chat-bubble-business {
+  background-color: #f0f0f0;
+  color: var(--text-dark);
+  margin-right: auto;
+  border-bottom-left-radius: 0;
+}
+
+/* Loading indicator */
+.chat-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+
+.chat-loading-dots {
+  display: flex;
+}
+
+.chat-loading-dots span {
+  width: 8px;
+  height: 8px;
+  margin: 0 2px;
+  background-color: var(--primary);
+  border-radius: 50%;
+  animation: dot-pulse 1.5s infinite ease-in-out;
+}
+
+.chat-loading-dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.chat-loading-dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes dot-pulse {
+  0%, 100% { transform: scale(0.5); opacity: 0.5; }
+  50% { transform: scale(1); opacity: 1; }
+}
+
+/* Componentes de formulário customizados */
+.form-control {
+  display: block;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  font-size: 1rem;
+  line-height: 1.5;
+  color: var(--text-dark);
+  background-color: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.375rem;
+  transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+}
+
+.form-control:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(0, 161, 157, 0.2);
+  outline: none;
+}
+
+/* Feedback components */
+.alert {
+  padding: 1rem;
+  border-radius: 0.375rem;
+  margin-bottom: 1rem;
+}
+
+.alert-success {
+  background-color: rgba(0, 184, 148, 0.1);
+  border-left: 4px solid var(--success);
+  color: var(--success);
+}
+
+.alert-warning {
+  background-color: rgba(253, 203, 110, 0.1);
+  border-left: 4px solid var(--warning);
+  color: var(--warning);
+}
+
+.alert-error {
+  background-color: rgba(255, 118, 117, 0.1);
+  border-left: 4px solid var(--error);
+  color: var(--error);
+}
+
+/* Toast notifications */
+.toast {
+  position: fixed;
+  bottom: 1rem;
+  right: 1rem;
+  padding: 1rem;
+  background-color: white;
+  border-radius: 0.375rem;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  z-index: 50;
+  max-width: 24rem;
+  animation: slideInFromBottom 0.3s ease-out;
+}
+
+@keyframes slideInFromBottom {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Demo section */
+.demo-container {
+  position: relative;
+  padding: 2rem;
+  background-color: var(--primary-light);
+  border-radius: 0.5rem;
+  margin: 2rem 0;
+}
+
+.demo-phone {
+  max-width: 300px;
+  margin: 0 auto;
+  border: 10px solid #333;
+  border-radius: 2rem;
+  overflow: hidden;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+/* Header and footer */
+.site-header {
+  background-color: white;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 1rem 0;
+}
+
+.site-footer {
+  background-color: var(--text-dark);
+  color: white;
+  padding: 3rem 0;
+  margin-top: auto;
+}
+
+/* Utilities */
+.text-primary {
+  color: var(--primary);
+}
+
+.bg-primary {
+  background-color: var(--primary);
+}
+
+.text-gradient {
+  background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
 }

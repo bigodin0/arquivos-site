@@ -1,9 +1,16 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import './index.css';
+import './styles/index.css';
 import App from './App';
-import reportWebVitals from './reportWebVitals';
+import reportWebVitals from './utils/reportWebVitals';
 import { GoogleOAuthProvider } from '@react-oauth/google';
+
+// Importações específicas de fontes para garantir carregamento correto
+import '@fontsource/inter/400.css';
+import '@fontsource/inter/500.css';
+import '@fontsource/inter/600.css';
+import '@fontsource/inter/700.css';
+import '@fontsource/montserrat/700.css';
 
 // Adicionar meta tag de CSP
 const metaCSP = document.createElement('meta');
@@ -47,7 +54,7 @@ window.addEventListener('unhandledrejection', (event) => {
 });
 
 // Seu Google Client ID deve vir das variáveis de ambiente
-const googleClientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
+const googleClientId = process.env.REACT_APP_GOOGLE_CLIENT_ID || '18083510078-oo57kqr1nqpm6b504aq84gksqsdluc5a.apps.googleusercontent.com';
 if (!googleClientId) {
   console.warn('Google Client ID não configurado. Login com Google não funcionará corretamente.');
 }

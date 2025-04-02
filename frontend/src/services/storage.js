@@ -1,12 +1,9 @@
-// Serviço para gerenciar o armazenamento dos fluxos de mensagens
-import axios from 'axios';
+// src/services/storage.js
+import ApiService from './apiService';
 import SecureStorageService from './secureStorage';
 
-// URL base da API - Detecção dinâmica do ambiente
-const isDevelopment = process.env.NODE_ENV === 'development';
-const API_BASE_URL = isDevelopment 
-  ? 'http://localhost:5000/api'  // URL de desenvolvimento
-  : 'https://simulachat-backend.onrender.com/api'; // URL de produção
+// URL base da API - Obtida do apiConfig
+const API_BASE_URL = ApiService.getBaseUrl();
 
 const StorageService = {
   // Chaves para diferentes tipos de dados (mantidas para compatibilidade)
@@ -48,70 +45,6 @@ const StorageService = {
     localStorage.removeItem(`cache_${key}`);
   },
 
-  // Verificar se há um usuário logado (usando SecureStorageService)
-  isUserLoggedIn: () => {
-    return SecureStorageService.isTokenValid();
-  },
-
-  // Obter o token de autenticação para chamadas API (usando SecureStorageService)
-  getAuthToken: () => {
-    return SecureStorageService.getToken();
-  },
-
-  // Método para obter headers de autenticação com melhor tratamento
-  getAuthHeaders: () => {
-    // Usar SecureStorageService para obter headers de autenticação
-    const authHeaders = SecureStorageService.getAuthHeaders();
-    if (authHeaders && authHeaders.headers) {
-      return authHeaders.headers;
-    }
-    
-    // Fallback para o caso de SecureStorageService não retornar headers válidos
-    return {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': process.env.NODE_ENV === 'development' ? '*' : null
-    };
-  },
-
-  // Método para chamadas de API com tratamento de erros e token
-  makeApiCall: async (endpoint, method = 'GET', data = null) => {
-    try {
-      // Verificar se o token é válido
-      if (!SecureStorageService.isTokenValid()) {
-        throw new Error('Não autenticado');
-      }
-
-      // Obter headers de autenticação usando SecureStorageService
-      const headers = SecureStorageService.getAuthHeaders().headers;
-
-      const config = {
-        method,
-        headers: {
-          ...headers,
-          'Content-Type': 'application/json'
-        }
-      };
-
-      if (data) {
-        config.body = JSON.stringify(data);
-      }
-
-      const response = await fetch(`${API_BASE_URL}/${endpoint}`, config);
-
-      if (response.status === 401 || response.status === 403) {
-        // Token inválido ou expirado, limpar token
-        SecureStorageService.clearToken();
-        window.location.href = '/login';
-        throw new Error('Sessão expirada');
-      }
-
-      return await response.json();
-    } catch (error) {
-      console.error('Erro na chamada da API:', error);
-      throw error;
-    }
-  },
-
   // === FLUXOS ===
   
   // Obter todos os fluxos
@@ -127,25 +60,15 @@ const StorageService = {
       // Primeiro tenta obter da API se o token for válido
       if (SecureStorageService.isTokenValid()) {
         try {
-          // Obter headers de autenticação usando SecureStorageService
-          const headers = SecureStorageService.getAuthHeaders().headers;
+          const response = await ApiService.flows.getAll();
           
-          const response = await axios.get(`${API_BASE_URL}/flows`, { headers });
-          
-          if (response.data.success) {
+          if (response.success) {
             // Salvar no cache
-            StorageService.setCachedData('flows', response.data.data);
-            return response.data.data;
+            StorageService.setCachedData('flows', response.data);
+            return response.data;
           }
         } catch (apiError) {
           console.warn('Erro ao buscar fluxos da API:', apiError);
-          
-          // Verificar se é um erro de autenticação
-          if (apiError.response && apiError.response.status === 401) {
-            // Token inválido ou expirado, limpar token
-            SecureStorageService.clearToken();
-          }
-          
           // Continuar para fallback
         }
       }
@@ -186,29 +109,19 @@ const StorageService = {
       // Tentar salvar na API se o token for válido
       if (SecureStorageService.isTokenValid()) {
         try {
-          // Obter headers de autenticação usando SecureStorageService
-          const headers = SecureStorageService.getAuthHeaders().headers;
+          const response = await ApiService.flows.create(flowData);
           
-          const response = await axios.post(`${API_BASE_URL}/flows`, flowData, { headers });
-          
-          if (response.data.success) {
+          if (response.success) {
             // Atualizar estatísticas
             StorageService.updateStats('flow_save');
             
             // Invalidar o cache de fluxos
             StorageService.invalidateCache('flows');
             
-            return response.data.data;
+            return response.data;
           }
         } catch (apiError) {
           console.warn('Erro ao salvar fluxo na API:', apiError);
-          
-          // Verificar se é um erro de autenticação
-          if (apiError.response && apiError.response.status === 401) {
-            // Token inválido ou expirado, limpar token
-            SecureStorageService.clearToken();
-          }
-          
           // Continuar para fallback
         }
       }
@@ -327,12 +240,9 @@ const StorageService = {
       // Tentar atualizar na API se o token for válido
       if (SecureStorageService.isTokenValid()) {
         try {
-          // Obter headers de autenticação usando SecureStorageService
-          const headers = SecureStorageService.getAuthHeaders().headers;
+          const response = await ApiService.flows.update(flow.id, flowData);
           
-          const response = await axios.put(`${API_BASE_URL}/flows/${flow.id}`, flowData, { headers });
-          
-          if (response.data.success) {
+          if (response.success) {
             // Atualizar estatísticas
             StorageService.updateStats('flow_edit');
             
@@ -340,7 +250,7 @@ const StorageService = {
             StorageService.invalidateCache('flows');
             StorageService.invalidateCache(`flow_${flow.id}`);
             
-            return response.data.data;
+            return response.data;
           }
         } catch (apiError) {
           console.warn('Erro ao atualizar fluxo na API:', apiError);
@@ -353,7 +263,9 @@ const StorageService = {
           
           // Continuar para fallback
         }
-      }// Fallback: atualizar localmente
+      }
+      
+      // Fallback: atualizar localmente
       console.warn('Fallback: Atualizando fluxo no localStorage');
       
       const flows = await StorageService.getFlows();
@@ -429,12 +341,9 @@ const StorageService = {
       // Tentar excluir na API se o token for válido
       if (SecureStorageService.isTokenValid()) {
         try {
-          // Obter headers de autenticação usando SecureStorageService
-          const headers = SecureStorageService.getAuthHeaders().headers;
+          const response = await ApiService.flows.delete(id);
           
-          const response = await axios.delete(`${API_BASE_URL}/flows/${id}`, { headers });
-          
-          if (response.data.success) {
+          if (response.success) {
             // Atualizar estatísticas
             StorageService.updateStats('flow_delete');
             
@@ -516,19 +425,16 @@ const StorageService = {
       // Tentar obter da API se o token for válido
       if (SecureStorageService.isTokenValid()) {
         try {
-          // Obter headers de autenticação usando SecureStorageService
-          const headers = SecureStorageService.getAuthHeaders().headers;
+          const response = await ApiService.flows.getById(id);
           
-          const response = await axios.get(`${API_BASE_URL}/flows/${id}`, { headers });
-          
-          if (response.data.success) {
+          if (response.success) {
             // Garantir que messages seja um array
-            if (!response.data.data.messages) {
-              response.data.data.messages = [];
+            if (!response.data.messages) {
+              response.data.messages = [];
             }
             // Salvar no cache
-            StorageService.setCachedData(`flow_${id}`, response.data.data);
-            return response.data.data;
+            StorageService.setCachedData(`flow_${id}`, response.data);
+            return response.data;
           }
         } catch (apiError) {
           console.warn('Erro ao obter fluxo da API:', apiError);
@@ -605,17 +511,17 @@ const StorageService = {
       
       // Tentar obter do backend (usando o ID original)
       try {
-        const response = await axios.get(`${API_BASE_URL}/shared-flows/${flowId}`);
+        const response = await ApiService.sharedFlows.getPublic(flowId);
         
-        if (response.data.success) {
+        if (response.success) {
           console.log("Fluxo encontrado na API:", flowId);
           // Garantir que messages seja um array
-          if (!response.data.data.flow.messages) {
-            response.data.data.flow.messages = [];
+          if (!response.data.flow.messages) {
+            response.data.flow.messages = [];
           }
           // Salvar no cache
-          StorageService.setCachedData(`public_flow_${flowId}`, response.data.data);
-          return response.data.data;
+          StorageService.setCachedData(`public_flow_${flowId}`, response.data);
+          return response.data;
         }
       } catch (apiError) {
         console.warn('Erro ao buscar fluxo compartilhado da API:', apiError);
@@ -680,7 +586,9 @@ const StorageService = {
     
     console.error("Fluxo não encontrado em nenhum lugar:", flowId);
     return null;
-  },// Fixar links existentes para usar o domínio atual
+  },
+
+  // Fixar links existentes para usar o domínio atual
   fixExistingLinks: async () => {
     const flows = await StorageService.getFlows();
     const baseUrl = window.location.origin;
@@ -727,14 +635,11 @@ const StorageService = {
       // Tentar obter da API com token seguro
       if (SecureStorageService.isTokenValid()) {
         try {
-          // Obter headers de autenticação usando SecureStorageService
-          const headers = SecureStorageService.getAuthHeaders().headers;
-          
-          const response = await axios.get(`${API_BASE_URL}/templates`, { headers });
-          if (response.data.success) {
+          const response = await ApiService.templates.getAll();
+          if (response.success) {
             // Salvar no cache
-            StorageService.setCachedData('templates', response.data.data);
-            return response.data.data;
+            StorageService.setCachedData('templates', response.data);
+            return response.data;
           }
         } catch (apiError) {
           console.warn('Erro ao buscar templates da API:', apiError);
@@ -905,59 +810,61 @@ const StorageService = {
   },
 
   // Compartilhar um fluxo
-  shareFlow: async (flow) => {
+  shareFlow: async (flowId) => {
     try {
       // Tentar compartilhar via API se o token for válido
       if (SecureStorageService.isTokenValid()) {
         try {
-          // Preparar dados para compartilhamento
-          const shareData = {
-            flowId: flow.id,
-            isPublic: true
-          };
+          const response = await ApiService.sharedFlows.share(flowId);
           
-          // Obter headers de autenticação usando SecureStorageService
-          const headers = SecureStorageService.getAuthHeaders().headers;
-          
-          const response = await axios.post(`${API_BASE_URL}/shared-flows`, shareData, { headers });
-          
-          if (response.data.success) {
+          if (response.success) {
             // Atualizar estatísticas
             StorageService.updateStats('flow_share');
             
             // Retornar dados do compartilhamento
-            const shareUrl = `${window.location.origin}/shared/${response.data.data.shareId}`;
+            const shareUrl = `${window.location.origin}/shared/${response.data.shareId}`;
+            const embedUrl = `${window.location.origin}/embed/${response.data.shareId}`;
             return {
               success: true,
-              shareId: response.data.data.shareId,
-              shareUrl
+              shareId: response.data.shareId,
+              shareUrl,
+              embedUrl
             };
           }
         } catch (apiError) {
           console.warn('Erro ao compartilhar fluxo via API:', apiError);
-          
-          // Verificar se é um erro de autenticação
-          if (apiError.response && apiError.response.status === 401) {
-            // Token inválido ou expirado, limpar token
-            SecureStorageService.clearToken();
-          }
-          
           // Continuar para fallback
         }
       }
       
       // Fallback: compartilhar localmente
+      // Implementação local igual ao código original
       console.warn('Fallback: Compartilhando fluxo localmente');
       
+      // Obter o fluxo
+      let flowToShare;
+      
+      // Se for um ID, obter o fluxo
+      if (typeof flowId !== 'object') {
+        flowToShare = await StorageService.getFlow(flowId);
+      } else {
+        // Se for um objeto de fluxo, usar diretamente
+        flowToShare = flowId;
+      }
+      
+      if (!flowToShare) {
+        throw new Error('Fluxo não encontrado');
+      }
+      
       // Gerar ID de compartilhamento
-      const shareId = StorageService.generateShareId();
+      const shareId = `f${flowToShare.id}_${StorageService.generateShareId()}`;
       
       // Obter fluxos compartilhados existentes
       const sharedFlows = StorageService.getSharedFlows();
       
       // Adicionar novo compartilhamento
       sharedFlows[shareId] = {
-        flow: flow,
+        flow: flowToShare,
         createdAt: new Date().toISOString(),
         views: 0
       };
@@ -968,13 +875,15 @@ const StorageService = {
       // Atualizar estatísticas
       StorageService.updateStats('flow_share');
       
-      // Construir URL de compartilhamento
+      // Construir URLs de compartilhamento
       const shareUrl = `${window.location.origin}/shared/${shareId}`;
+      const embedUrl = `${window.location.origin}/embed/${shareId}`;
       
       return {
         success: true,
         shareId,
-        shareUrl
+        shareUrl,
+        embedUrl
       };
     } catch (error) {
       console.error('Erro ao compartilhar fluxo:', error);
@@ -997,19 +906,19 @@ const StorageService = {
       
       // Tentar obter da API
       try {
-        const response = await axios.get(`${API_BASE_URL}/shared-flows/${shareId}`);
-        if (response.data.success) {
+        const response = await ApiService.sharedFlows.getById(shareId);
+        if (response.success) {
           // Salvar no cache
-          StorageService.setCachedData(`shared_flow_${shareId}`, response.data.data);
+          StorageService.setCachedData(`shared_flow_${shareId}`, response.data);
           
           // Registrar visualização
           try {
-            await axios.post(`${API_BASE_URL}/shared-flows/${shareId}/view`);
+            await ApiService.sharedFlows.registerView(shareId);
           } catch (viewError) {
             console.warn('Erro ao registrar visualização:', viewError);
           }
           
-          return response.data.data;
+          return response.data;
         }
       } catch (apiError) {
         console.warn('Erro ao buscar fluxo compartilhado da API:', apiError);
@@ -1055,7 +964,7 @@ const StorageService = {
     try {
       // Tentar incrementar na API
       try {
-        await axios.post(`${API_BASE_URL}/shared-flows/${shareId}/view`);
+        await ApiService.sharedFlows.registerView(shareId);
         return true;
       } catch (apiError) {
         console.warn('Erro ao incrementar visualizações na API:', apiError);

@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Check, Star, Crown, Zap, Shield, Award, ChevronRight, Loader } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
 import apiConfig from '../config/api';
 import SecureStorageService from '../services/secureStorage';
