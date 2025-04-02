@@ -5,7 +5,7 @@ import SecureStorageService from './secureStorage';
 // Instância base do axios com configurações padrão
 const axiosInstance = axios.create({
   baseURL: apiConfig.API_BASE_URL,
-  timeout: 10000, // 10 segundos
+  timeout: 15000, // 15 segundos
   headers: {
     'Content-Type': 'application/json'
   }
@@ -59,8 +59,8 @@ axiosInstance.interceptors.response.use(
           console.error('Erro ao renovar token:', refreshError);
           // Limpar token inválido
           SecureStorageService.clearAuth();
-          // Redirecionar para login se necessário
-          window.location.href = '/login';
+          // Não redirecionar automaticamente para não perder dados do usuário
+          return Promise.reject(error);
         }
       } else {
         // Limpar token inválido
@@ -82,10 +82,28 @@ const ApiService = {
   // Obter a URL base
   getBaseUrl,
   
-  // Requisições GET
+  // Verificar se a API está online
+  async checkApiStatus() {
+    try {
+      const response = await fetch(`${apiConfig.API_BASE_URL}/api/status`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 5000
+      });
+      return response.ok;
+    } catch (error) {
+      console.warn('API indisponível:', error);
+      return false;
+    }
+  },
+  
+  // Requisições GET com verificação de disponibilidade de API
   async get(endpoint, params = {}, config = {}) {
     try {
-      const response = await axiosInstance.get(endpoint, { ...config, params });
+      // Tentar fazer requisição com retry
+      const response = await this.requestWithRetry(() => 
+        axiosInstance.get(endpoint, { ...config, params })
+      );
       return response.data;
     } catch (error) {
       this.handleError(error);
@@ -96,7 +114,9 @@ const ApiService = {
   // Requisições POST
   async post(endpoint, data = {}, config = {}) {
     try {
-      const response = await axiosInstance.post(endpoint, data, config);
+      const response = await this.requestWithRetry(() => 
+        axiosInstance.post(endpoint, data, config)
+      );
       return response.data;
     } catch (error) {
       this.handleError(error);
@@ -107,7 +127,9 @@ const ApiService = {
   // Requisições PUT
   async put(endpoint, data = {}, config = {}) {
     try {
-      const response = await axiosInstance.put(endpoint, data, config);
+      const response = await this.requestWithRetry(() => 
+        axiosInstance.put(endpoint, data, config)
+      );
       return response.data;
     } catch (error) {
       this.handleError(error);
@@ -118,12 +140,42 @@ const ApiService = {
   // Requisições DELETE
   async delete(endpoint, config = {}) {
     try {
-      const response = await axiosInstance.delete(endpoint, config);
+      const response = await this.requestWithRetry(() => 
+        axiosInstance.delete(endpoint, config)
+      );
       return response.data;
     } catch (error) {
       this.handleError(error);
       throw error;
     }
+  },
+  
+  // Função de retry para requisições
+  async requestWithRetry(requestFn, maxRetries = 2, delayMs = 1000) {
+    let lastError;
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await requestFn();
+      } catch (error) {
+        lastError = error;
+        
+        // Só fazer retry em casos específicos (timeout, erros de rede, 503)
+        const shouldRetry = !error.response || 
+                           error.code === 'ECONNABORTED' || 
+                           (error.response && error.response.status === 503);
+        
+        if (attempt >= maxRetries || !shouldRetry) {
+          break;
+        }
+        
+        // Esperar antes de tentar novamente (delay exponencial)
+        const delay = delayMs * Math.pow(2, attempt);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+    
+    throw lastError;
   },
   
   // Tratamento centralizado de erros
@@ -137,27 +189,61 @@ const ApiService = {
       
       switch (status) {
         case 400:
-          console.error('Erro de validação:', data.error || 'Dados inválidos');
+          console.error('Erro de validação:', data.error || data.message || 'Dados inválidos');
           break;
         case 401:
-          console.error('Não autorizado:', data.error || 'Autenticação necessária');
+          console.error('Não autorizado:', data.error || data.message || 'Autenticação necessária');
           break;
         case 403:
-          console.error('Proibido:', data.error || 'Sem permissão para acessar este recurso');
+          console.error('Proibido:', data.error || data.message || 'Token inválido ou expirado');
           break;
         case 404:
-          console.error('Não encontrado:', data.error || 'Recurso não encontrado');
+          console.error('Não encontrado:', data.error || data.message || 'Recurso não encontrado');
+          break;
+        case 429:
+          console.error('Muitas requisições:', data.error || data.message || 'Limite de requisições excedido');
           break;
         case 500:
-          console.error('Erro do servidor:', data.error || 'Erro interno do servidor');
+          console.error('Erro do servidor:', data.error || data.message || 'Erro interno do servidor');
           break;
         default:
-          console.error(`Erro ${status}:`, data.error || 'Algo deu errado');
+          console.error(`Erro ${status}:`, data.error || data.message || 'Algo deu errado');
       }
     } else if (error.request) {
       console.error('Sem resposta do servidor. Verifique sua conexão com a internet.');
     } else {
       console.error('Erro na configuração da requisição:', error.message);
+    }
+    
+    // Enviar erro para um serviço de monitoramento (opcional)
+    this.logError(error);
+    
+    return error;
+  },
+  
+  // Função para registrar erros (pode ser integrada com serviços de monitoramento)
+  logError(error) {
+    // Aqui você poderia integrar com Sentry, LogRocket, etc.
+    // Por enquanto vamos apenas registrar no localStorage para não perder infos
+    try {
+      const errorLogs = JSON.parse(localStorage.getItem('api_error_logs') || '[]');
+      errorLogs.push({
+        timestamp: new Date().toISOString(),
+        message: error.message,
+        status: error.response?.status,
+        endpoint: error.config?.url,
+        method: error.config?.method,
+        stack: error.stack
+      });
+      
+      // Manter apenas os últimos 20 erros
+      while (errorLogs.length > 20) {
+        errorLogs.shift();
+      }
+      
+      localStorage.setItem('api_error_logs', JSON.stringify(errorLogs));
+    } catch (e) {
+      console.error('Erro ao salvar log de erro:', e);
     }
   },
   
@@ -167,7 +253,11 @@ const ApiService = {
     register: (name, email, password) => ApiService.post('/api/auth/register', { name, email, password }),
     me: () => ApiService.get('/api/auth/me'),
     refreshToken: (refreshToken) => ApiService.post('/api/auth/refresh-token', { refreshToken }),
-    googleLogin: (token, email, name, picture) => ApiService.post('/api/auth/google-login', { token, email, name, picture })
+    googleLogin: (token, email, name, picture) => ApiService.post('/api/auth/google-login', { token, email, name, picture }),
+    logout: () => {
+      SecureStorageService.clearAuth();
+      return Promise.resolve({ success: true });
+    }
   },
   
   flows: {
@@ -176,7 +266,17 @@ const ApiService = {
     create: (flowData) => ApiService.post('/api/flows', flowData),
     update: (id, flowData) => ApiService.put(`/api/flows/${id}`, flowData),
     delete: (id) => ApiService.delete(`/api/flows/${id}`),
-    fromTemplate: (templateId) => ApiService.post(`/api/flows/from-template/${templateId}`)
+    fromTemplate: (templateId) => ApiService.post(`/api/flows/from-template/${templateId}`),
+    getFallback: (id) => {
+      // Método de fallback para quando a API estiver offline
+      try {
+        const flows = JSON.parse(localStorage.getItem('flows') || '[]');
+        const flow = flows.find(f => f.id === id);
+        return Promise.resolve({ success: true, data: flow || null });
+      } catch (e) {
+        return Promise.resolve({ success: false, error: 'Erro ao buscar fluxo do cache' });
+      }
+    }
   },
   
   sharedFlows: {
@@ -185,7 +285,19 @@ const ApiService = {
     getPublic: (flowId) => ApiService.get(`/api/shared-flows/public/${flowId}`),
     share: (flowId) => ApiService.post('/api/shared-flows', { flowId, isPublic: true }),
     registerView: (code) => ApiService.post(`/api/shared-flows/${code}/view`),
-    recordView: (code) => ApiService.post(`/api/shared-flows/${code}/view`)
+    generateShareUrl: (flowId) => {
+      // Gerar URL de compartilhamento mesmo offline
+      const baseUrl = window.location.origin;
+      const shareCode = btoa(`flow_${flowId}_${Date.now()}`).replace(/=/g, '');
+      return Promise.resolve({
+        success: true,
+        data: {
+          shareUrl: `${baseUrl}/flow/share/${shareCode}`,
+          embedUrl: `${baseUrl}/embed/${shareCode}`,
+          code: shareCode
+        }
+      });
+    }
   },
   
   templates: {
@@ -197,6 +309,27 @@ const ApiService = {
     getAll: () => ApiService.get('/api/planos'),
     createCheckout: (planData) => ApiService.post('/api/checkout', planData),
     verifySubscription: (paymentId) => ApiService.get(`/api/subscriptions/verify/${paymentId}`)
+  },
+  
+  media: {
+    uploadFile: (file, onProgress) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      return ApiService.post('/api/media/upload', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        },
+        onUploadProgress: (progressEvent) => {
+          if (onProgress) {
+            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            onProgress(percentCompleted);
+          }
+        }
+      });
+    },
+    getAll: () => ApiService.get('/api/media'),
+    delete: (id) => ApiService.delete(`/api/media/${id}`)
   }
 };
 

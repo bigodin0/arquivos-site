@@ -6,13 +6,14 @@ import SecureStorageService from './secureStorage';
 const API_BASE_URL = ApiService.getBaseUrl();
 
 const StorageService = {
-  // Chaves para diferentes tipos de dados (mantidas para compatibilidade)
+  // Chaves para diferentes tipos de dados
   KEYS: {
     FLOWS: 'simulachat_flows',
     TEMPLATES: 'simulachat_templates',
     USER: 'simulachat_user',
     STATS: 'simulachat_stats',
-    SHARED: 'simulachat_shared'
+    SHARED: 'simulachat_shared',
+    MEDIA: 'simulachat_media'
   },
 
   // Funções de cache
@@ -45,6 +46,28 @@ const StorageService = {
     localStorage.removeItem(`cache_${key}`);
   },
 
+  // Verifica se localStorage está disponível
+  isLocalStorageAvailable: () => {
+    try {
+      const test = '__storage_test__';
+      localStorage.setItem(test, test);
+      localStorage.removeItem(test);
+      return true;
+    } catch (e) {
+      console.warn('localStorage não está disponível:', e);
+      return false;
+    }
+  },
+
+  // Garantir que temos um ID válido
+  ensureValidId: (id) => {
+    if (!id || id === 'undefined' || id === 'null') {
+      // Gerar um ID único se não for fornecido ou inválido
+      return `flow_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    }
+    return id;
+  },
+
   // === FLUXOS ===
   
   // Obter todos os fluxos
@@ -62,7 +85,7 @@ const StorageService = {
         try {
           const response = await ApiService.flows.getAll();
           
-          if (response.success) {
+          if (response && response.success) {
             // Salvar no cache
             StorageService.setCachedData('flows', response.data);
             return response.data;
@@ -92,6 +115,23 @@ const StorageService = {
   // Salvar um fluxo
   saveFlow: async (flow) => {
     try {
+      // Garantir que temos um ID válido
+      if (!flow.id || flow.id === 'undefined' || flow.id === 'null') {
+        flow.id = StorageService.ensureValidId(flow.id);
+        flow.createdAt = new Date().toLocaleDateString();
+      }
+      
+      // Garantir que flow.messages seja sempre um array
+      if (!flow.messages) {
+        flow.messages = [];
+      }
+      
+      // Calcular messageCount
+      flow.messageCount = Array.isArray(flow.messages) ? flow.messages.length : 0;
+      
+      // Atualizar timestamp
+      flow.updatedAt = new Date().toLocaleDateString();
+      
       // Se tem um ID, é uma atualização
       if (flow.id) {
         return StorageService.updateFlow(flow);
@@ -99,11 +139,12 @@ const StorageService = {
       
       // Preparar dados para a API
       const flowData = {
-        title: flow.title,
-        description: flow.description,
+        title: flow.title || 'Novo Fluxo',
+        description: flow.description || '',
         platform: flow.platform || 'whatsapp',
         messages: flow.messages || [],
-        contactName: flow.contactName || 'Atendimento'
+        contactName: flow.contactName || 'Atendimento',
+        id: flow.id
       };
       
       // Tentar salvar na API se o token for válido
@@ -111,7 +152,7 @@ const StorageService = {
         try {
           const response = await ApiService.flows.create(flowData);
           
-          if (response.success) {
+          if (response && response.success) {
             // Atualizar estatísticas
             StorageService.updateStats('flow_save');
             
@@ -133,26 +174,10 @@ const StorageService = {
       // Usar o domínio atual para gerar links
       const baseUrl = window.location.origin;
       
-      // Se é um novo fluxo, gere um ID
-      if (!flow.id) {
-        flow.id = Date.now();
-        flow.createdAt = new Date().toLocaleDateString();
-        
-        // Garantir que o link use o domínio atual
-        if (!flow.link || flow.link.includes('simulachat.app')) {
-          flow.link = `${baseUrl}/flow/${flow.id}`;
-        }
+      // Garantir que o link use o domínio atual
+      if (!flow.link || flow.link.includes('simulachat.app')) {
+        flow.link = `${baseUrl}/flow/${flow.id}`;
       }
-      
-      flow.updatedAt = new Date().toLocaleDateString();
-      
-      // Garantir que flow.messages seja sempre um array
-      if (!flow.messages) {
-        flow.messages = [];
-      }
-      
-      // Calcular messageCount
-      flow.messageCount = Array.isArray(flow.messages) ? flow.messages.length : 0;
       
       // Adicionar ao array de fluxos
       flows.push(flow);
@@ -176,7 +201,7 @@ const StorageService = {
         
         // Gerar ID se necessário
         if (!flow.id) {
-          flow.id = Date.now();
+          flow.id = StorageService.ensureValidId(flow.id);
           flow.createdAt = new Date().toLocaleDateString();
         }
         
@@ -214,9 +239,15 @@ const StorageService = {
 
   // Atualizar um fluxo existente
   updateFlow: async (flow) => {
-    if (!flow || !flow.id) {
-      console.error("Tentativa de atualizar um fluxo sem ID");
+    if (!flow) {
+      console.error("Tentativa de atualizar um fluxo sem dados");
       return null;
+    }
+    
+    // Garantir que temos um ID válido
+    if (!flow.id || flow.id === 'undefined' || flow.id === 'null') {
+      flow.id = StorageService.ensureValidId(flow.id);
+      console.warn(`ID de fluxo inválido foi substituído por: ${flow.id}`);
     }
     
     try {
@@ -228,13 +259,17 @@ const StorageService = {
       // Calcular messageCount
       flow.messageCount = Array.isArray(flow.messages) ? flow.messages.length : 0;
       
+      // Atualizar o timestamp de atualização
+      flow.updatedAt = new Date().toLocaleDateString();
+      
       // Preparar dados para a API
       const flowData = {
-        title: flow.title,
-        description: flow.description,
+        title: flow.title || 'Fluxo Atualizado',
+        description: flow.description || '',
         platform: flow.platform || 'whatsapp',
         messages: flow.messages || [],
-        contactName: flow.contactName || 'Atendimento'
+        contactName: flow.contactName || 'Atendimento',
+        sharePageSettings: flow.sharePageSettings || {}
       };
       
       // Tentar atualizar na API se o token for válido
@@ -242,7 +277,7 @@ const StorageService = {
         try {
           const response = await ApiService.flows.update(flow.id, flowData);
           
-          if (response.success) {
+          if (response && response.success) {
             // Atualizar estatísticas
             StorageService.updateStats('flow_edit');
             
@@ -268,19 +303,24 @@ const StorageService = {
       // Fallback: atualizar localmente
       console.warn('Fallback: Atualizando fluxo no localStorage');
       
-      const flows = await StorageService.getFlows();
+      // Obter fluxos locais
+      const storedFlows = localStorage.getItem(StorageService.KEYS.FLOWS);
+      let flows = storedFlows ? JSON.parse(storedFlows) : [];
+      
+      // Procurar o fluxo pelo ID
       const index = flows.findIndex(f => f.id === flow.id);
       
       if (index === -1) {
-        console.error(`Fluxo com ID ${flow.id} não encontrado para atualização`);
-        return null;
+        // Se o fluxo não existir, adicioná-lo como novo
+        console.warn(`Fluxo com ID ${flow.id} não encontrado para atualização. Adicionando como novo.`);
+        flow.createdAt = flow.createdAt || new Date().toLocaleDateString();
+        flows.push(flow);
+      } else {
+        // Preservar a data de criação
+        flow.createdAt = flows[index].createdAt;
+        // Atualizar o fluxo no array
+        flows[index] = flow;
       }
-      
-      // Atualizar o timestamp de atualização
-      flow.updatedAt = new Date().toLocaleDateString();
-      
-      // Atualizar o fluxo no array
-      flows[index] = flow;
       
       // Salvar no localStorage
       localStorage.setItem(StorageService.KEYS.FLOWS, JSON.stringify(flows));
@@ -301,19 +341,17 @@ const StorageService = {
         const flowsArray = flows ? JSON.parse(flows) : [];
         
         const index = flowsArray.findIndex(f => f.id === flow.id);
-        if (index === -1) return null;
         
-        flow.updatedAt = new Date().toLocaleDateString();
-        
-        // Garantir que flow.messages seja sempre um array
-        if (!flow.messages) {
-          flow.messages = [];
+        if (index === -1) {
+          // Se o fluxo não existir, adicioná-lo como novo
+          console.warn(`Fluxo com ID ${flow.id} não encontrado para atualização. Adicionando como novo.`);
+          flow.createdAt = flow.createdAt || new Date().toLocaleDateString();
+          flowsArray.push(flow);
+        } else {
+          // Preservar a data de criação
+          flow.createdAt = flowsArray[index].createdAt;
+          flowsArray[index] = flow;
         }
-        
-        // Calcular messageCount
-        flow.messageCount = Array.isArray(flow.messages) ? flow.messages.length : 0;
-        
-        flowsArray[index] = flow;
         
         try {
           localStorage.setItem(StorageService.KEYS.FLOWS, JSON.stringify(flowsArray));
@@ -337,13 +375,19 @@ const StorageService = {
 
   // Excluir um fluxo
   deleteFlow: async (id) => {
+    // Garantir que temos um ID válido
+    if (!id || id === 'undefined' || id === 'null') {
+      console.error("Tentativa de excluir um fluxo com ID inválido");
+      return null;
+    }
+    
     try {
       // Tentar excluir na API se o token for válido
       if (SecureStorageService.isTokenValid()) {
         try {
           const response = await ApiService.flows.delete(id);
           
-          if (response.success) {
+          if (response && response.success) {
             // Atualizar estatísticas
             StorageService.updateStats('flow_delete');
             
@@ -414,6 +458,12 @@ const StorageService = {
 
   // Obter um fluxo específico
   getFlow: async (id) => {
+    // Garantir que temos um ID válido
+    if (!id || id === 'undefined' || id === 'null') {
+      console.warn("getFlow: ID inválido fornecido");
+      return null;
+    }
+    
     try {
       // Verificar cache primeiro
       const cachedFlow = StorageService.getCachedData(`flow_${id}`);
@@ -427,7 +477,7 @@ const StorageService = {
         try {
           const response = await ApiService.flows.getById(id);
           
-          if (response.success) {
+          if (response && response.success) {
             // Garantir que messages seja um array
             if (!response.data.messages) {
               response.data.messages = [];
@@ -456,7 +506,7 @@ const StorageService = {
       if (!flows) return null;
       
       const flowsArray = JSON.parse(flows);
-      const flow = flowsArray.find(f => Number(f.id) === Number(id));
+      const flow = flowsArray.find(f => String(f.id) === String(id));
       
       // Garantir que messages seja um array
       if (flow && !flow.messages) {
@@ -478,7 +528,7 @@ const StorageService = {
         
         try {
           const flowsArray = JSON.parse(flows);
-          const flow = flowsArray.find(f => Number(f.id) === Number(id));
+          const flow = flowsArray.find(f => String(f.id) === String(id));
           
           // Garantir que messages seja um array
           if (flow && !flow.messages) {
@@ -497,231 +547,267 @@ const StorageService = {
     }
   },
 
-  // Método para obter um fluxo compartilhado para exibição pública
-  getFlowForPublicSharing: async (flowId) => {
-    console.log("Buscando fluxo público com ID:", flowId);
+  // === COMPARTILHAMENTO DE FLUXOS ===
+  
+  // Obter fluxos compartilhados
+  getSharedFlows: () => {
+    try {
+      const shared = localStorage.getItem(StorageService.KEYS.SHARED);
+      return shared ? JSON.parse(shared) : {};
+    } catch (error) {
+      console.error('Erro ao obter fluxos compartilhados:', error);
+      return {};
+    }
+  },
+
+  // Gerar um ID único para compartilhamento
+  generateShareId: () => {
+    // Gerar um ID aleatório de 8 caracteres
+    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    const charactersLength = characters.length;
+    for (let i = 0; i < 8; i++) {
+      result += characters.charAt(Math.floor(Math.random() * charactersLength));
+    }
+    
+    return result;
+  },
+
+  // Compartilhar um fluxo
+  shareFlow: async (flowId) => {
+    // Garantir que temos um ID válido
+    if (!flowId || flowId === 'undefined' || flowId === 'null') {
+      console.error("Tentativa de compartilhar um fluxo com ID inválido");
+      return {
+        success: false,
+        error: 'ID de fluxo inválido'
+      };
+    }
+    
+    try {
+      // Obter o fluxo
+      let flowToShare;
+      
+      // Se for um ID, obter o fluxo
+      if (typeof flowId !== 'object') {
+        flowToShare = await StorageService.getFlow(flowId);
+        
+        if (!flowToShare) {
+          return {
+            success: false,
+            error: 'Fluxo não encontrado'
+          };
+        }
+      } else {
+        // Se for um objeto de fluxo, usar diretamente
+        flowToShare = flowId;
+      }
+      
+      // Tentar compartilhar via API se o token for válido
+      if (SecureStorageService.isTokenValid()) {
+        try {
+          const response = await ApiService.sharedFlows.share(flowToShare.id);
+          
+          if (response && response.success) {
+            // Atualizar estatísticas
+            StorageService.updateStats('flow_share');
+            
+            // Retornar dados do compartilhamento
+            const shareUrl = `${window.location.origin}/shared/${response.data.shareId}`;
+            const embedUrl = `${window.location.origin}/embed/${response.data.shareId}`;
+            return {
+              success: true,
+              shareId: response.data.shareId,
+              shareUrl,
+              embedUrl
+            };
+          }
+        } catch (apiError) {
+          console.warn('Erro ao compartilhar fluxo via API:', apiError);
+          // Continuar para fallback
+        }
+      }
+      
+      // Fallback: compartilhar localmente
+      console.warn('Fallback: Compartilhando fluxo localmente');
+      
+      // Gerar ID de compartilhamento
+      const shareId = `f${flowToShare.id}_${StorageService.generateShareId()}`;
+      
+      // Obter fluxos compartilhados existentes
+      const sharedFlows = StorageService.getSharedFlows();
+      
+      // Adicionar novo compartilhamento
+      sharedFlows[shareId] = {
+        flow: flowToShare,
+        createdAt: new Date().toISOString(),
+        views: 0
+      };
+      
+      // Salvar no localStorage
+      localStorage.setItem(StorageService.KEYS.SHARED, JSON.stringify(sharedFlows));
+      
+      // Atualizar estatísticas
+      StorageService.updateStats('flow_share');
+      
+      // Construir URLs de compartilhamento
+      const shareUrl = `${window.location.origin}/shared/${shareId}`;
+      const embedUrl = `${window.location.origin}/embed/${shareId}`;
+      
+      return {
+        success: true,
+        shareId,
+        shareUrl,
+        embedUrl
+      };
+    } catch (error) {
+      console.error('Erro ao compartilhar fluxo:', error);
+      return {
+        success: false,
+        error: 'Não foi possível compartilhar o fluxo'
+      };
+    }
+  },
+
+  // Obter um fluxo compartilhado pelo ID
+  getSharedFlow: async (shareId) => {
+    if (!shareId) {
+      return null;
+    }
     
     try {
       // Verificar cache primeiro
-      const cachedPublicFlow = StorageService.getCachedData(`public_flow_${flowId}`);
-      if (cachedPublicFlow) {
-        console.log(`Usando fluxo público ${flowId} do cache`);
-        return cachedPublicFlow;
+      const cachedSharedFlow = StorageService.getCachedData(`shared_flow_${shareId}`);
+      if (cachedSharedFlow) {
+        console.log(`Usando fluxo compartilhado ${shareId} do cache`);
+        return cachedSharedFlow;
       }
       
-      // Tentar obter do backend (usando o ID original)
+      // Tentar obter da API
       try {
-        const response = await ApiService.sharedFlows.getPublic(flowId);
-        
-        if (response.success) {
-          console.log("Fluxo encontrado na API:", flowId);
-          // Garantir que messages seja um array
-          if (!response.data.flow.messages) {
-            response.data.flow.messages = [];
-          }
+        const response = await ApiService.sharedFlows.getById(shareId);
+        if (response && response.success) {
           // Salvar no cache
-          StorageService.setCachedData(`public_flow_${flowId}`, response.data);
+          StorageService.setCachedData(`shared_flow_${shareId}`, response.data);
+          
+          // Registrar visualização
+          try {
+            await ApiService.sharedFlows.registerView(shareId);
+          } catch (viewError) {
+            console.warn('Erro ao registrar visualização:', viewError);
+          }
+          
           return response.data;
         }
       } catch (apiError) {
         console.warn('Erro ao buscar fluxo compartilhado da API:', apiError);
         // Continuar para fallback
       }
+      
+      // Fallback: buscar localmente
+      console.warn('Fallback: Buscando fluxo compartilhado localmente');
+      
+      const sharedFlows = StorageService.getSharedFlows();
+      const sharedFlow = sharedFlows[shareId];
+      
+      if (sharedFlow) {
+        // Incrementar contagem de visualizações
+        sharedFlow.views = (sharedFlow.views || 0) + 1;
+        localStorage.setItem(StorageService.KEYS.SHARED, JSON.stringify(sharedFlows));
+        
+        // Atualizar estatísticas
+        StorageService.updateStats('share_view');
+        
+        // Salvar no cache
+        StorageService.setCachedData(`shared_flow_${shareId}`, sharedFlow);
+        
+        return sharedFlow;
+      }
+      
+      return null;
     } catch (error) {
-      console.error("Erro ao buscar fluxo na API:", error);
-    }
-    
-    // Se falhar, tenta usar o fallback local
-    console.warn('Fallback: Buscando fluxo compartilhado no localStorage');
-    
-    // Tentativa 2: Procurar nos fluxos compartilhados locais
-    const sharedFlows = StorageService.getSharedFlows();
-    
-    // Procurar um compartilhamento que tenha esse flowId
-    const matchingShare = Object.entries(sharedFlows).find(([key, share]) => 
-      share.flow && Number(share.flow.id) === Number(flowId)
-    );
-    
-    if (matchingShare) {
-      const [shareKey, shareData] = matchingShare;
-      console.log("Fluxo compartilhado encontrado localmente:", shareKey);
-      
-      // Garantir que messages seja um array
-      if (!shareData.flow.messages) {
-        shareData.flow.messages = [];
+      console.error('Erro ao obter fluxo compartilhado:', error);
+      // Último fallback
+      try {
+        const sharedFlows = StorageService.getSharedFlows();
+        return sharedFlows[shareId] || null;
+      } catch (localError) {
+        console.error('Erro no fallback local:', localError);
+        return null;
       }
-      
-      // Salvar no cache
-      StorageService.setCachedData(`public_flow_${flowId}`, shareData);
-      return shareData;
     }
-    
-    // Se não encontrou nos compartilhamentos, tentar encontrar nos fluxos locais
-    const flow = await StorageService.getFlow(flowId);
-    if (flow) {
-      console.log("Fluxo encontrado localmente:", flowId);
-      
-      // Garantir que messages seja um array
-      if (!flow.messages) {
-        flow.messages = [];
-      }
-      
-      const flowData = {
-        flow: {
-          title: flow.title,
-          description: flow.description,
-          platform: flow.platform || 'whatsapp',
-          contactName: flow.contactName || 'Atendimento',
-          messages: flow.messages || []
-        },
-        createdAt: new Date().toISOString(),
-        views: 0
-      };
-      
-      // Salvar no cache
-      StorageService.setCachedData(`public_flow_${flowId}`, flowData);
-      
-      return flowData;
-    }
-    
-    console.error("Fluxo não encontrado em nenhum lugar:", flowId);
-    return null;
   },
 
-  // Fixar links existentes para usar o domínio atual
-  fixExistingLinks: async () => {
-    const flows = await StorageService.getFlows();
-    const baseUrl = window.location.origin;
-    let updated = false;
-    
-    const updatedFlows = flows.map(flow => {
-      // Verificar se o link usa simulachat.vercel.app ou similar
-      if (flow.link && (
-        flow.link.includes('simulachat.vercel.app') || 
-        flow.link.includes('simulachat.app') ||
-        flow.link.includes('localhost')
-      )) {
-        // Atualizar para usar o domínio atual
-        flow.link = `${baseUrl}/flow/${flow.id}`;
-        updated = true;
-      }
-      return flow;
-    });
-    
-    if (updated) {
-      localStorage.setItem(StorageService.KEYS.FLOWS, JSON.stringify(updatedFlows));
-      
-      // Invalidar cache
-      StorageService.invalidateCache('flows');
-      
-      console.log('Links atualizados para usar o domínio atual');
-    }
-    
-    return updatedFlows;
-  },
-
-  // === TEMPLATES ===
+  // === ARQUIVOS DE MÍDIA ===
   
-  // Obter todos os templates
-  getTemplates: async () => {
+  // Obter arquivos de mídia
+  getMediaFiles: async () => {
     try {
       // Verificar cache primeiro
-      const cachedTemplates = StorageService.getCachedData('templates');
-      if (cachedTemplates) {
-        console.log('Usando templates do cache');
-        return cachedTemplates;
+      const cachedMedia = StorageService.getCachedData('media_files');
+      if (cachedMedia) {
+        console.log('Usando arquivos de mídia do cache');
+        return cachedMedia;
       }
       
-      // Tentar obter da API com token seguro
+      // Tentar obter da API se o token for válido
       if (SecureStorageService.isTokenValid()) {
         try {
-          const response = await ApiService.templates.getAll();
-          if (response.success) {
+          const response = await ApiService.media.getAll();
+          
+          if (response && response.success) {
             // Salvar no cache
-            StorageService.setCachedData('templates', response.data);
+            StorageService.setCachedData('media_files', response.data);
             return response.data;
           }
         } catch (apiError) {
-          console.warn('Erro ao buscar templates da API:', apiError);
-          
-          // Verificar se é um erro de autenticação
-          if (apiError.response && apiError.response.status === 401) {
-            // Token inválido ou expirado, limpar token
-            SecureStorageService.clearToken();
-          }
-          
+          console.warn('Erro ao buscar arquivos de mídia da API:', apiError);
           // Continuar para fallback
         }
       }
       
       // Fallback para localStorage
-      console.warn('Fallback: Usando templates do localStorage');
-      const templates = localStorage.getItem(StorageService.KEYS.TEMPLATES);
-      const parsedTemplates = templates ? JSON.parse(templates) : [];
+      console.warn('Fallback: Usando arquivos de mídia do localStorage');
+      const media = localStorage.getItem(StorageService.KEYS.MEDIA);
+      const parsedMedia = media ? JSON.parse(media) : [];
+      
+      // Mockar alguns arquivos de mídia para desenvolvimento
+      if (parsedMedia.length === 0) {
+        const mockMedia = [
+          {
+            id: 'media_1',
+            name: 'imagem_exemplo.jpg',
+            type: 'image/jpeg',
+            url: 'https://via.placeholder.com/300x200',
+            size: 12345,
+            createdAt: new Date().toISOString()
+          },
+          {
+            id: 'media_2',
+            name: 'video_exemplo.mp4',
+            type: 'video/mp4',
+            url: 'https://example.com/video.mp4',
+            size: 98765,
+            createdAt: new Date().toISOString()
+          }
+        ];
+        
+        localStorage.setItem(StorageService.KEYS.MEDIA, JSON.stringify(mockMedia));
+        
+        // Salvar no cache
+        StorageService.setCachedData('media_files', mockMedia);
+        
+        return mockMedia;
+      }
       
       // Salvar no cache
-      StorageService.setCachedData('templates', parsedTemplates);
+      StorageService.setCachedData('media_files', parsedMedia);
       
-      return parsedTemplates;
+      return parsedMedia;
     } catch (error) {
-      console.error('Erro ao obter templates:', error);
-      // Último fallback
-      const templates = localStorage.getItem(StorageService.KEYS.TEMPLATES);
-      return templates ? JSON.parse(templates) : [];
-    }
-  },
-
-  // Salvar templates
-  saveTemplates: (templates) => {
-    try {
-      localStorage.setItem(StorageService.KEYS.TEMPLATES, JSON.stringify(templates));
-      
-      // Invalidar cache
-      StorageService.invalidateCache('templates');
-      
-      return true;
-    } catch (error) {
-      console.error('Erro ao salvar templates:', error);
-      return false;
-    }
-  },
-
-  // === USUÁRIO ===
-  
-  // Salvar dados do usuário
-  saveUser: (user) => {
-    try {
-      localStorage.setItem(StorageService.KEYS.USER, JSON.stringify(user));
-      return true;
-    } catch (error) {
-      console.error('Erro ao salvar usuário:', error);
-      return false;
-    }
-  },
-
-  // Obter dados do usuário
-  getUser: () => {
-    try {
-      const user = localStorage.getItem(StorageService.KEYS.USER);
-      return user ? JSON.parse(user) : null;
-    } catch (error) {
-      console.error('Erro ao obter usuário:', error);
-      return null;
-    }
-  },
-
-  // Limpar dados do usuário
-  clearUser: () => {
-    try {
-      localStorage.removeItem(StorageService.KEYS.USER);
-      
-      // Limpar token usando SecureStorageService
-      SecureStorageService.clearToken();
-      
-      return true;
-    } catch (error) {
-      console.error('Erro ao limpar usuário:', error);
-      return false;
+      console.error('Erro ao buscar arquivos de mídia:', error);
+      // Fallback para array vazio em vez de null
+      return [];
     }
   },
 
@@ -783,219 +869,134 @@ const StorageService = {
     }
   },
 
-  // === COMPARTILHAMENTO ===
-  
-  // Obter fluxos compartilhados
-  getSharedFlows: () => {
-    try {
-      const shared = localStorage.getItem(StorageService.KEYS.SHARED);
-      return shared ? JSON.parse(shared) : {};
-    } catch (error) {
-      console.error('Erro ao obter fluxos compartilhados:', error);
-      return {};
+  // Método para obter um fluxo compartilhado para exibição pública
+  getFlowForPublicSharing: async (flowId) => {
+    if (!flowId || flowId === 'undefined' || flowId === 'null') {
+      console.error("ID inválido fornecido para compartilhamento público");
+      return null;
     }
-  },
 
-  // Gerar um ID único para compartilhamento
-  generateShareId: () => {
-    // Gerar um ID aleatório de 8 caracteres
-    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let result = '';
-    const charactersLength = characters.length;
-    for (let i = 0; i < 8; i++) {
-      result += characters.charAt(Math.floor(Math.random() * charactersLength));
-    }
+    console.log("Buscando fluxo público com ID:", flowId);
     
-    return result;
-  },
-
-  // Compartilhar um fluxo
-  shareFlow: async (flowId) => {
-    try {
-      // Tentar compartilhar via API se o token for válido
-      if (SecureStorageService.isTokenValid()) {
-        try {
-          const response = await ApiService.sharedFlows.share(flowId);
-          
-          if (response.success) {
-            // Atualizar estatísticas
-            StorageService.updateStats('flow_share');
-            
-            // Retornar dados do compartilhamento
-            const shareUrl = `${window.location.origin}/shared/${response.data.shareId}`;
-            const embedUrl = `${window.location.origin}/embed/${response.data.shareId}`;
-            return {
-              success: true,
-              shareId: response.data.shareId,
-              shareUrl,
-              embedUrl
-            };
-          }
-        } catch (apiError) {
-          console.warn('Erro ao compartilhar fluxo via API:', apiError);
-          // Continuar para fallback
-        }
-      }
-      
-      // Fallback: compartilhar localmente
-      // Implementação local igual ao código original
-      console.warn('Fallback: Compartilhando fluxo localmente');
-      
-      // Obter o fluxo
-      let flowToShare;
-      
-      // Se for um ID, obter o fluxo
-      if (typeof flowId !== 'object') {
-        flowToShare = await StorageService.getFlow(flowId);
-      } else {
-        // Se for um objeto de fluxo, usar diretamente
-        flowToShare = flowId;
-      }
-      
-      if (!flowToShare) {
-        throw new Error('Fluxo não encontrado');
-      }
-      
-      // Gerar ID de compartilhamento
-      const shareId = `f${flowToShare.id}_${StorageService.generateShareId()}`;
-      
-      // Obter fluxos compartilhados existentes
-      const sharedFlows = StorageService.getSharedFlows();
-      
-      // Adicionar novo compartilhamento
-      sharedFlows[shareId] = {
-        flow: flowToShare,
-        createdAt: new Date().toISOString(),
-        views: 0
-      };
-      
-      // Salvar no localStorage
-      localStorage.setItem(StorageService.KEYS.SHARED, JSON.stringify(sharedFlows));
-      
-      // Atualizar estatísticas
-      StorageService.updateStats('flow_share');
-      
-      // Construir URLs de compartilhamento
-      const shareUrl = `${window.location.origin}/shared/${shareId}`;
-      const embedUrl = `${window.location.origin}/embed/${shareId}`;
-      
-      return {
-        success: true,
-        shareId,
-        shareUrl,
-        embedUrl
-      };
-    } catch (error) {
-      console.error('Erro ao compartilhar fluxo:', error);
-      return {
-        success: false,
-        error: 'Não foi possível compartilhar o fluxo'
-      };
-    }
-  },
-
-  // Obter um fluxo compartilhado pelo ID
-  getSharedFlow: async (shareId) => {
     try {
       // Verificar cache primeiro
-      const cachedSharedFlow = StorageService.getCachedData(`shared_flow_${shareId}`);
-      if (cachedSharedFlow) {
-        console.log(`Usando fluxo compartilhado ${shareId} do cache`);
-        return cachedSharedFlow;
+      const cachedPublicFlow = StorageService.getCachedData(`public_flow_${flowId}`);
+      if (cachedPublicFlow) {
+        console.log(`Usando fluxo público ${flowId} do cache`);
+        return cachedPublicFlow;
       }
       
-      // Tentar obter da API
+      // Tentar obter do backend (usando o ID original)
       try {
-        const response = await ApiService.sharedFlows.getById(shareId);
-        if (response.success) {
-          // Salvar no cache
-          StorageService.setCachedData(`shared_flow_${shareId}`, response.data);
-          
-          // Registrar visualização
-          try {
-            await ApiService.sharedFlows.registerView(shareId);
-          } catch (viewError) {
-            console.warn('Erro ao registrar visualização:', viewError);
+        const response = await ApiService.sharedFlows.getPublic(flowId);
+        
+        if (response && response.success) {
+          console.log("Fluxo encontrado na API:", flowId);
+          // Garantir que messages seja um array
+          if (!response.data.flow.messages) {
+            response.data.flow.messages = [];
           }
-          
+          // Salvar no cache
+          StorageService.setCachedData(`public_flow_${flowId}`, response.data);
           return response.data;
         }
       } catch (apiError) {
         console.warn('Erro ao buscar fluxo compartilhado da API:', apiError);
         // Continuar para fallback
       }
-      
-      // Fallback: buscar localmente
-      console.warn('Fallback: Buscando fluxo compartilhado localmente');
-      
-      const sharedFlows = StorageService.getSharedFlows();
-      const sharedFlow = sharedFlows[shareId];
-      
-      if (sharedFlow) {
-        // Incrementar contagem de visualizações
-        sharedFlow.views = (sharedFlow.views || 0) + 1;
-        localStorage.setItem(StorageService.KEYS.SHARED, JSON.stringify(sharedFlows));
-        
-        // Atualizar estatísticas
-        StorageService.updateStats('share_view');
-        
-        // Salvar no cache
-        StorageService.setCachedData(`shared_flow_${shareId}`, sharedFlow);
-        
-        return sharedFlow;
-      }
-      
-      return null;
     } catch (error) {
-      console.error('Erro ao obter fluxo compartilhado:', error);
-      // Último fallback
-      try {
-        const sharedFlows = StorageService.getSharedFlows();
-        return sharedFlows[shareId] || null;
-      } catch (localError) {
-        console.error('Erro no fallback local:', localError);
-        return null;
-      }
+      console.error("Erro ao buscar fluxo na API:", error);
     }
+    
+    // Se falhar, tenta usar o fallback local
+    console.warn('Fallback: Buscando fluxo compartilhado no localStorage');
+    
+    // Tentativa 1: Procurar nos fluxos compartilhados locais
+    const sharedFlows = StorageService.getSharedFlows();
+    
+    // Procurar um compartilhamento que tenha esse flowId
+    const matchingShare = Object.entries(sharedFlows).find(([key, share]) => 
+      share.flow && String(share.flow.id) === String(flowId)
+    );
+    
+    if (matchingShare) {
+      const [shareKey, shareData] = matchingShare;
+      console.log("Fluxo compartilhado encontrado localmente:", shareKey);
+      
+      // Garantir que messages seja um array
+      if (!shareData.flow.messages) {
+        shareData.flow.messages = [];
+      }
+      
+      // Salvar no cache
+      StorageService.setCachedData(`public_flow_${flowId}`, shareData);
+      return shareData;
+    }
+    
+    // Tentativa 2: Se não encontrou nos compartilhamentos, tentar encontrar nos fluxos locais
+    const flow = await StorageService.getFlow(flowId);
+    if (flow) {
+      console.log("Fluxo encontrado localmente:", flowId);
+      
+      // Garantir que messages seja um array
+      if (!flow.messages) {
+        flow.messages = [];
+      }
+      
+      const flowData = {
+        flow: {
+          id: flow.id,
+          title: flow.title || 'Fluxo Compartilhado',
+          description: flow.description || '',
+          platform: flow.platform || 'whatsapp',
+          contactName: flow.contactName || 'Atendimento',
+          messages: flow.messages || [],
+          sharePageSettings: flow.sharePageSettings || {}
+        },
+        createdAt: new Date().toISOString(),
+        views: 0
+      };
+      
+      // Salvar no cache
+      StorageService.setCachedData(`public_flow_${flowId}`, flowData);
+      
+      return flowData;
+    }
+    
+    console.error("Fluxo não encontrado em nenhum lugar:", flowId);
+    return null;
   },
 
-  // Incrementar visualizações de um fluxo compartilhado
-  incrementSharedFlowViews: async (shareId) => {
-    try {
-      // Tentar incrementar na API
-      try {
-        await ApiService.sharedFlows.registerView(shareId);
-        return true;
-      } catch (apiError) {
-        console.warn('Erro ao incrementar visualizações na API:', apiError);
-        // Continuar para fallback
+  // Fixar links existentes para usar o domínio atual
+  fixExistingLinks: async () => {
+    const flows = await StorageService.getFlows();
+    const baseUrl = window.location.origin;
+    let updated = false;
+    
+    const updatedFlows = flows.map(flow => {
+      // Verificar se o link usa simulachat.vercel.app ou similar
+      if (flow.link && (
+        flow.link.includes('simulachat.vercel.app') || 
+        flow.link.includes('simulachat.app') ||
+        flow.link.includes('localhost')
+      )) {
+        // Atualizar para usar o domínio atual
+        flow.link = `${baseUrl}/flow/${flow.id}`;
+        updated = true;
       }
+      return flow;
+    });
+    
+    if (updated) {
+      localStorage.setItem(StorageService.KEYS.FLOWS, JSON.stringify(updatedFlows));
       
-      // Fallback: incrementar localmente
-      console.warn('Fallback: Incrementando visualizações localmente');
+      // Invalidar cache
+      StorageService.invalidateCache('flows');
       
-      const sharedFlows = StorageService.getSharedFlows();
-      const sharedFlow = sharedFlows[shareId];
-      
-      if (sharedFlow) {
-        // Incrementar contagem de visualizações
-        sharedFlow.views = (sharedFlow.views || 0) + 1;
-        localStorage.setItem(StorageService.KEYS.SHARED, JSON.stringify(sharedFlows));
-        
-        // Atualizar estatísticas
-        StorageService.updateStats('share_view');
-        
-        // Invalidar cache
-        StorageService.invalidateCache(`shared_flow_${shareId}`);
-        
-        return true;
-      }
-      
-      return false;
-    } catch (error) {
-      console.error('Erro ao incrementar visualizações:', error);
-      return false;
+      console.log('Links atualizados para usar o domínio atual');
     }
+    
+    return updatedFlows;
   }
 };
 

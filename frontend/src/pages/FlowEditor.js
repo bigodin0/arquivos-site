@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
+import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 import {
   ArrowLeft,
   Plus,
@@ -15,7 +16,11 @@ import {
   Clipboard,
   AlertTriangle,
   Loader,
-  Copy 
+  Copy,
+  Image,
+  Film,
+  Music,
+  FileImage
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import StorageService from '../services/storage';
@@ -53,9 +58,46 @@ const FlowEditor = () => {
   const [saving, setSaving] = useState(false);
   const [saveTimeoutId, setSaveTimeoutId] = useState(null);
   const [buttonsConfig, setButtonsConfig] = useState([]);
+  const [mediaFiles, setMediaFiles] = useState([]);
+  const [showMediaSelector, setShowMediaSelector] = useState(false);
+  const [sharePageSettings, setSharePageSettings] = useState({
+    showHeader: true,
+    headerColor: '#00A19D',
+    headerText: '',
+    logoUrl: '',
+    productImage: '',
+    productDescription: '',
+    showFooter: true,
+    footerText: '',
+    watermarkEnabled: true
+  });
   
   // Obtendo detalhes do plano no nível do componente
   const currentPlan = getPlanDetails();
+
+  // Verificação de autenticação (adicionada da correção)
+  const checkAuthentication = () => {
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+      console.warn('Token de autenticação não encontrado');
+      return false;
+    }
+    
+    // Verificar se o token está expirado (se tiver um mecanismo para isso)
+    try {
+      const tokenData = JSON.parse(atob(token.split('.')[1]));
+      if (tokenData.exp && tokenData.exp < Date.now() / 1000) {
+        console.warn('Token expirado, redirecionando para login');
+        // Redirecionar para login ou renovar o token
+        return false;
+      }
+    } catch (e) {
+      console.error('Erro ao verificar token:', e);
+      return false;
+    }
+    
+    return true;
+  };
 
   // Verificar disponibilidade de recursos com base no plano
   const checkFeatureAvailability = useCallback((feature) => {
@@ -82,6 +124,30 @@ const FlowEditor = () => {
         return false;
     }
   }, [currentPlan.name]);
+
+  // Função para carregar arquivos de mídia
+  useEffect(() => {
+    const loadMediaFiles = async () => {
+      try {
+        // Correção: Verificar se o objeto existe e tem a função antes de chamar
+        if (StorageService && typeof StorageService.getMediaFiles === 'function') {
+          const files = await StorageService.getMediaFiles();
+          setMediaFiles(files || []);
+        } else {
+          // Fallback para um array vazio se a função não existir
+          console.warn('StorageService.getMediaFiles não está disponível');
+          setMediaFiles([]);
+        }
+      } catch (error) {
+        console.error("Erro ao carregar arquivos de mídia:", error);
+        setMediaFiles([]);
+      }
+    };
+    
+    if (checkFeatureAvailability('media')) {
+      loadMediaFiles();
+    }
+  }, [checkFeatureAvailability]);
 
   // Renderizar aviso de recursos restritos - memoizado
   const renderFeatureRestrictionWarning = useMemo(() => {
@@ -122,6 +188,11 @@ const FlowEditor = () => {
           setOriginalTitle(loadedFlow.title || '');
           setSelectedPlatform(loadedFlow.platform || 'whatsapp');
           
+          // Carregar configurações da página de compartilhamento se existir
+          if (loadedFlow.sharePageSettings) {
+            setSharePageSettings(loadedFlow.sharePageSettings);
+          }
+          
           // Gerar links
           try {
             const shareData = await StorageService.shareFlow(id);
@@ -134,23 +205,40 @@ const FlowEditor = () => {
           }
         } else {
           // Se não existe um fluxo com este ID, criar um novo
+          const uniqueId = id || `flow_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
           const newFlow = {
-            id: id,
+            id: uniqueId,
             title: 'Novo Fluxo',
             description: 'Descrição do seu novo fluxo',
             platform: 'whatsapp',
             messages: [],
             createdAt: new Date().toLocaleDateString(),
-            updatedAt: new Date().toLocaleDateString()
+            updatedAt: new Date().toLocaleDateString(),
+            sharePageSettings: {
+              showHeader: true,
+              headerColor: '#00A19D',
+              headerText: '',
+              logoUrl: '',
+              productImage: '',
+              productDescription: '',
+              showFooter: true,
+              footerText: '',
+              watermarkEnabled: true
+            }
           };
           
           setFlow(newFlow);
           setOriginalTitle(newFlow.title);
           setSelectedPlatform(newFlow.platform);
+          
+          // Salvar o novo fluxo imediatamente para garantir persistência
+          setTimeout(() => {
+            StorageService.saveFlow(newFlow);
+          }, 0);
         }
         
-        // Verificar se o token é válido
-        if (SecureStorageService.isTokenValid()) {
+        // Verificar se o token é válido usando a nova função de checkAuthentication
+        if (checkAuthentication()) {
           // Tentar buscar da API
           try {
             const headers = SecureStorageService.getAuthHeaders().headers;
@@ -173,6 +261,11 @@ const FlowEditor = () => {
               setFlow(flowData);
               setOriginalTitle(flowData.title || '');
               setSelectedPlatform(flowData.platform || 'whatsapp');
+              
+              // Carregar configurações da página de compartilhamento se existir
+              if (flowData.sharePageSettings) {
+                setSharePageSettings(flowData.sharePageSettings);
+              }
               
               // Gerar links de compartilhamento
               try {
@@ -290,6 +383,25 @@ const FlowEditor = () => {
     }
   }, []);
 
+  // Função para lidar com arrastar e soltar mensagens
+  const handleDragEnd = (result) => {
+    if (!result.destination) return;
+    
+    const items = Array.from(flow.messages);
+    const [reorderedItem] = items.splice(result.source.index, 1);
+    items.splice(result.destination.index, 0, reorderedItem);
+    
+    setFlow({
+      ...flow,
+      messages: items
+    });
+    
+    // Salvar automaticamente após reordenar
+    setTimeout(() => {
+      handleSaveFlow();
+    }, 500);
+  };
+
   // Handlers
   const handleSaveFlow = useCallback(async () => {
     // Validação do fluxo
@@ -300,7 +412,7 @@ const FlowEditor = () => {
     
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
-      return;
+      return false;
     }
     
     setSaving(true);
@@ -323,13 +435,14 @@ const FlowEditor = () => {
         platform: selectedPlatform,
         messageCount: Array.isArray(flow.messages) ? flow.messages.length : 0,
         updatedAt: new Date().toLocaleDateString(),
+        sharePageSettings // Incluir configurações de personalização da página de compartilhamento
       };
       
       // Tentar salvar localmente primeiro para ter um fallback garantido
       const savedFlow = StorageService.updateFlow(updatedFlow);
       
-      // Verificar se o token é válido antes de tentar usar a API
-      if (SecureStorageService.isTokenValid()) {
+      // Verificar se o token é válido usando a nova função de checkAuthentication
+      if (checkAuthentication()) {
         try {
           const headers = SecureStorageService.getAuthHeaders().headers;
           
@@ -365,13 +478,16 @@ const FlowEditor = () => {
           saveBtn.textContent = 'Salvar';
         }, 2000);
       }
+      
+      return true;
     } catch (error) {
       console.error("Erro ao salvar fluxo:", error);
       setErrors({ general: "Erro ao salvar. Tente novamente." });
+      return false;
     } finally {
       setSaving(false);
     }
-  }, [flow, id, selectedPlatform]);
+  }, [flow, id, selectedPlatform, sharePageSettings]);
 
   const handleAddButtonOption = () => {
     setButtonsConfig([...buttonsConfig, { 
@@ -392,6 +508,32 @@ const FlowEditor = () => {
     const updatedButtons = [...buttonsConfig];
     updatedButtons.splice(index, 1);
     setButtonsConfig(updatedButtons);
+  };
+
+  // Função para lidar com interação do botão na visualização
+  const handleButtonInteraction = (button, messageId) => {
+    // Adicionar a resposta do cliente ao fluxo
+    if (button.responseMessage || button.text) {
+      const customerResponse = {
+        id: Date.now(),
+        type: 'text',
+        sender: 'customer',
+        content: button.responseMessage || button.text,
+        delay: 0
+      };
+      
+      // Adicionar resposta ao fluxo
+      setFlow(prevFlow => ({
+        ...prevFlow,
+        messages: [...prevFlow.messages, customerResponse]
+      }));
+    }
+    
+    // Se houver um destino (jumpTo), implementar a lógica de pular
+    if (button.jumpTo) {
+      // Esta lógica seria implementada na visualização/simulação
+      console.log(`Pulando para mensagem ID: ${button.jumpTo}`);
+    }
   };
 
   const handleAddMessage = useCallback(() => {
@@ -437,6 +579,7 @@ const FlowEditor = () => {
     });
     setButtonsConfig([]);
     setErrors({});
+    setShowMediaSelector(false);
     
     // Salvar automaticamente após adicionar a mensagem
     setTimeout(() => {
@@ -484,6 +627,7 @@ const FlowEditor = () => {
     setEditMode(null);
     setEditIndex(null);
     setErrors({});
+    setShowMediaSelector(false);
     
     // Salvar após atualizar
     setTimeout(() => {
@@ -507,6 +651,13 @@ const FlowEditor = () => {
       setButtonsConfig([]);
     }
     
+    // Mostrar seletor de mídia se for um tipo de mídia
+    if (['image', 'video', 'audio', 'gif'].includes(message.type)) {
+      setShowMediaSelector(true);
+    } else {
+      setShowMediaSelector(false);
+    }
+    
     setEditMode('edit');
     setEditIndex(index);
   }, [flow?.messages]);
@@ -527,32 +678,128 @@ const FlowEditor = () => {
 
   const handleCopyLink = useCallback(async (type = 'share') => {
     try {
-      const linkToCopy = type === 'share' ? (shareLink || '#') : (embedLink || '#');
+      // Primeiro, garantir que o fluxo está salvo com dados atualizados
+      const saved = await handleSaveFlow();
       
-      // Verifica se o link é válido antes de copiar
-      if (linkToCopy === '#') {
-        console.warn("Link não disponível para copiar");
-        alert("Link não disponível no momento. Por favor, salve o fluxo primeiro.");
+      if (!saved) {
+        throw new Error("Não foi possível salvar o fluxo antes de compartilhar");
+      }
+      
+      // Gerar links de compartilhamento
+      const shareData = await StorageService.shareFlow(id);
+      
+      if (!shareData || !shareData.success) {
+        throw new Error("Não foi possível gerar o link de compartilhamento");
+      }
+      
+      // Atualizar os links no estado
+      setShareLink(shareData.shareUrl || '#');
+      setEmbedLink(shareData.embedUrl || '#');
+      
+      // Verificar se os links são válidos
+      const linkToCopy = type === 'share' ? shareData.shareUrl : shareData.embedUrl;
+      
+      if (!linkToCopy || linkToCopy === '#') {
+        console.error("Link não disponível para copiar");
+        alert("Erro ao gerar link. Por favor, tente novamente.");
         return;
       }
       
+      // Copiar o link apropriado
       await navigator.clipboard.writeText(linkToCopy);
+      
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
       
       // Feedback para o usuário
-      alert("Link copiado para a área de transferência!");
+      alert(`Link ${type === 'share' ? 'de compartilhamento' : 'de incorporação'} copiado!`);
     } catch (error) {
       console.error("Erro ao copiar link:", error);
-      alert("Não foi possível copiar o link. Por favor, tente novamente.");
+      alert("Erro ao gerar o link. Por favor, salve o fluxo primeiro e tente novamente.");
     }
-  }, [shareLink, embedLink]);
+  }, [id, handleSaveFlow]);
 
   const handlePreview = useCallback(() => {
     // Salvar antes de visualizar
     handleSaveFlow();
     navigate(`/flow/${id}/preview`);
   }, [handleSaveFlow, id, navigate]);
+
+  // Função para selecionar arquivo de mídia
+  const handleSelectMedia = (fileUrl) => {
+    setNewMessage({...newMessage, content: fileUrl});
+    setShowMediaSelector(false);
+  };
+
+  // Função para obter o ícone apropriado para o tipo de mídia
+  const getMediaTypeIcon = (type) => {
+    switch (type) {
+      case 'image':
+        return <Image size={16} className="mr-1" />;
+      case 'video':
+        return <Film size={16} className="mr-1" />;
+      case 'audio':
+        return <Music size={16} className="mr-1" />;
+      case 'gif':
+        return <FileImage size={16} className="mr-1" />;
+      default:
+        return <FileImage size={16} className="mr-1" />;
+    }
+  };
+
+  // Componente de seleção de mídia
+  const MediaSelector = () => {
+    if (!checkFeatureAvailability('media')) {
+      return (
+        <div className="bg-gray-50 p-3 rounded-lg text-gray-500 text-sm text-center mb-4">
+          Upgrade seu plano para utilizar recursos de mídia
+        </div>
+      );
+    }
+    
+    return (
+      <div className="border rounded-lg p-3 bg-gray-50 mb-4">
+        <h5 className="font-medium text-sm mb-3">Selecione um arquivo de mídia:</h5>
+        
+        {mediaFiles.length === 0 ? (
+          <div className="text-center py-5">
+            <p className="text-gray-500 text-sm">Nenhum arquivo disponível</p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-2"
+              onClick={() => navigate('/media-library')}
+            >
+              Adicionar arquivos
+            </Button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-3 gap-2">
+            {mediaFiles.map(file => (
+              <div
+                key={file.id}
+                className="border rounded p-2 hover:border-teal-400 cursor-pointer transition-colors"
+                onClick={() => handleSelectMedia(file.url)}
+              >
+                <div className="h-16 bg-gray-200 flex items-center justify-center mb-1">
+                  {file.type.startsWith('image/') ? (
+                    <img src={file.url} alt={file.name} className="h-full object-contain" />
+                  ) : file.type.startsWith('video/') ? (
+                    <Film size={24} className="text-gray-500" />
+                  ) : file.type.startsWith('audio/') ? (
+                    <Music size={24} className="text-gray-500" />
+                  ) : (
+                    <div className="text-gray-500 text-xs">{file.type.split('/')[0]}</div>
+                  )}
+                </div>
+                <p className="text-xs truncate">{file.name}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // Funções de renderização
   const renderMessageBubble = useCallback((message, index) => {
@@ -572,29 +819,83 @@ const FlowEditor = () => {
             ${isBusiness ? theme.messageBubbleBusiness : ''}
           `}
         >
-          <div className="mb-1 text-xs opacity-70">
-            {isCustomer ? 'Cliente' : 'Empresa'} 
+          <div className="mb-1 text-xs opacity-70 flex items-center justify-between">
+            <span>{isCustomer ? 'Cliente' : 'Empresa'}</span>
             {message.delay > 0 && (
               <span className="ml-2 inline-flex items-center">
                 <Clock size={12} className="mr-1" />
                 {message.delay}s
               </span>
             )}
+            <span className="text-xs text-teal-600 opacity-50 ml-2">ID: {message.id}</span>
           </div>
           
           <div className="text-sm break-words">
             {message.type === 'buttons' && Array.isArray(message.buttons) ? (
               <div>
-                <p className="mb-2">{message.content}</p>
-                <div className="space-y-1">
+                <p className="mb-3">{message.content}</p>
+                <div className="space-y-2">
                   {message.buttons.map((button, btnIndex) => (
-                    <div key={btnIndex} className="bg-gray-100 text-gray-800 p-1 rounded text-xs text-center">
+                    <button
+                      key={btnIndex}
+                      className="w-full py-2 px-3 rounded-lg text-center bg-white border border-gray-300 text-gray-800 hover:bg-gray-50 transition-colors"
+                      onClick={() => handleButtonInteraction(button, message.id)}
+                    >
                       {button.text}
-                    </div>
+                      {button.jumpTo && (
+                        <span className="ml-1 text-xs text-gray-500">
+                          → {button.jumpTo}
+                        </span>
+                      )}
+                    </button>
                   ))}
                 </div>
               </div>
-            ) : message.content}
+            ) : message.type === 'image' ? (
+              <div>
+                <img 
+                  src={message.content} 
+                  alt="Imagem" 
+                  className="max-w-full rounded" 
+                  onError={(e) => {
+                    e.target.onerror = null; 
+                    e.target.src = 'https://via.placeholder.com/150?text=Imagem+não+encontrada';
+                  }}
+                />
+                <p className="mt-1 text-xs text-gray-500">Imagem</p>
+              </div>
+            ) : message.type === 'video' ? (
+              <div>
+                <div className="bg-gray-800 rounded-lg p-2 flex items-center justify-center">
+                  <Film size={24} className="text-gray-400" />
+                  <span className="ml-2 text-gray-400">{message.content}</span>
+                </div>
+                <p className="mt-1 text-xs text-gray-500">Vídeo</p>
+              </div>
+            ) : message.type === 'audio' ? (
+              <div>
+                <div className="bg-gray-100 rounded-lg p-2 flex items-center">
+                  <Music size={20} className="text-gray-500" />
+                  <span className="ml-2 text-gray-600">{message.content}</span>
+                </div>
+                <p className="mt-1 text-xs text-gray-500">Áudio</p>
+              </div>
+            ) : message.type === 'gif' ? (
+              <div>
+                <img 
+                  src={message.content} 
+                  alt="GIF" 
+                  className="max-w-full rounded" 
+                  onError={(e) => {
+                    e.target.onerror = null; 
+                    e.target.src = 'https://via.placeholder.com/150?text=GIF+não+encontrado';
+                  }}
+                />
+                <p className="mt-1 text-xs text-gray-500">GIF</p>
+              </div>
+            ) : (
+              message.content
+            )}
           </div>
           
           {/* Ações da mensagem - aparecem no hover */}
@@ -615,7 +916,7 @@ const FlowEditor = () => {
         </div>
       </div>
     );
-  }, [selectedPlatform, getPlatformTheme, handleEditMessage, handleDeleteMessage]);
+  }, [selectedPlatform, getPlatformTheme, handleEditMessage, handleDeleteMessage, handleButtonInteraction]);
   
   // Uso de useMemo para otimizar renderização de mensagens
   const renderMessages = useMemo(() => {
@@ -683,76 +984,6 @@ const FlowEditor = () => {
     };
   }, [flow?.messages]);
 
-  // Renderizar configuração de botões
-  const renderButtonsConfig = () => {
-    if (newMessage.type !== 'buttons') return null;
-    
-    return (
-      <div className="mt-4 border-t pt-4">
-        <div className="flex justify-between items-center mb-4">
-          <h4 className="font-medium text-gray-700">Configuração de Botões</h4>
-          <Button
-            variant="outline"
-            onClick={handleAddButtonOption}
-            icon={<Plus size={16} />}
-            size="sm"
-          >
-            Adicionar Botão
-          </Button>
-        </div>
-        
-        {buttonsConfig.length === 0 ? (
-          <div className="text-center py-3 bg-gray-50 rounded-lg">
-            <p className="text-gray-500 text-sm">Adicione botões para sua mensagem</p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {buttonsConfig.map((button, index) => (
-              <div key={index} className="p-3 border rounded-lg bg-gray-50">
-                <div className="flex justify-between mb-2">
-                  <h5 className="text-sm font-medium">Botão {index + 1}</h5>
-                  <button
-                    onClick={() => handleRemoveButtonOption(index)}
-                    className="text-red-500 hover:text-red-700"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </div>
-                
-                <div className="space-y-3">
-                  <TextField
-                    label="Texto do botão"
-                    value={button.text}
-                    onChange={(e) => handleUpdateButtonConfig(index, 'text', e.target.value)}
-                    placeholder="Ex: Sim, quero comprar"
-                    size="sm"
-                  />
-                  
-                  <TextField
-                    label="Mensagem de resposta (opcional)"
-                    value={button.responseMessage}
-                    onChange={(e) => handleUpdateButtonConfig(index, 'responseMessage', e.target.value)}
-                    placeholder="Resposta do cliente ao clicar"
-                    size="sm"
-                  />
-                  
-                  <TextField
-                    label="Pular para (opcional)"
-                    value={button.jumpTo}
-                    onChange={(e) => handleUpdateButtonConfig(index, 'jumpTo', e.target.value)}
-                    placeholder="ID da mensagem para pular"
-                    helperText="Deixe em branco para continuar a sequência normal"
-                    size="sm"
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  };
-
   if (loading) {
     return (
       <MainLayout>
@@ -773,8 +1004,8 @@ const FlowEditor = () => {
       <MainLayout>
         <Container>
           <div className="flex flex-col items-center justify-center h-[60vh]">
-            <div className="bg-white rounded-lg shadow-lg p-8 max-w-md w-full text-center">
-              <AlertTriangle size={40} className="mx-auto text-amber-500 mb-4" />
+            <div className="bg-red-50 border border-red-200 p-6 rounded-lg text-center max-w-md">
+              <AlertTriangle size={40} className="text-red-500 mx-auto mb-4" />
               <h2 className="text-xl font-semibold text-gray-800 mb-2">Erro ao carregar fluxo</h2>
               <p className="text-gray-600 mb-4">{error}</p>
               <Button 
@@ -903,11 +1134,38 @@ const FlowEditor = () => {
                 
                 {renderPlatformPreview}
                 
-                {/* Área de mensagens */}
-                <div className={`${getPlatformTheme(selectedPlatform).chatBg} rounded-lg p-4 mb-4 min-h-[300px] max-h-[400px] overflow-y-auto`}>
-                  {renderMessages}
-                  <div ref={messageEndRef} />
-                </div>
+                {/* Área de mensagens com drag and drop */}
+                <DragDropContext onDragEnd={handleDragEnd}>
+                  <Droppable droppableId="messages">
+                    {(provided) => (
+                      <div 
+                        className={`${getPlatformTheme(selectedPlatform).chatBg} rounded-lg p-4 mb-4 min-h-[300px] max-h-[400px] overflow-y-auto`}
+                        {...provided.droppableProps}
+                        ref={provided.innerRef}
+                      >
+                        {flow.messages.map((message, index) => (
+                          <Draggable 
+                            key={message.id.toString()} 
+                            draggableId={message.id.toString()} 
+                            index={index}
+                          >
+                            {(provided) => (
+                              <div
+                                ref={provided.innerRef}
+                                {...provided.draggableProps}
+                                {...provided.dragHandleProps}
+                              >
+                                {renderMessageBubble(message, index)}
+                              </div>
+                            )}
+                          </Draggable>
+                        ))}
+                        {provided.placeholder}
+                        <div ref={messageEndRef} />
+                      </div>
+                    )}
+                  </Droppable>
+                </DragDropContext>
                 
                 {/* Formulário de mensagem */}
                 <div className="rounded-lg border border-gray-200 p-4">
@@ -926,7 +1184,10 @@ const FlowEditor = () => {
                     <Select
                       label="Tipo"
                       value={newMessage.type}
-                      onChange={(e) => setNewMessage({...newMessage, type: e.target.value})}
+                      onChange={(e) => {
+                        setNewMessage({...newMessage, type: e.target.value});
+                        setShowMediaSelector(['image', 'video', 'audio', 'gif'].includes(e.target.value));
+                      }}
                       options={[
                         { value: 'text', label: 'Texto' },
                         { value: 'buttons', label: 'Botões' },
@@ -960,12 +1221,26 @@ const FlowEditor = () => {
                         type="number"
                         min="0"
                         value={newMessage.delay}
-                        onChange={(e) => setNewMessage({...newMessage, delay: parseInt(e.target.value) || 0})}
+                        onChange={(e) => {
+                          // Permitir campo vazio para facilitar a edição
+                          const value = e.target.value === '' ? '' : parseInt(e.target.value);
+                          setNewMessage({...newMessage, delay: value === '' ? 0 : value});
+                        }}
+                        onFocus={(e) => {
+                          // Selecionar todo o texto ao focar para facilitar substituição
+                          e.target.select();
+                        }}
                         className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-teal-500 focus:border-teal-500"
                       />
                     </div>
                   </div>
 
+                  {/* Seletor de mídia para tipos não texto/botões */}
+                  {showMediaSelector && (
+                    <MediaSelector />
+                  )}
+
+                  {/* Editor de conteúdo da mensagem */}
                   <TextField
                     value={newMessage.content}
                     onChange={(e) => setNewMessage({...newMessage, content: e.target.value})}
@@ -975,9 +1250,79 @@ const FlowEditor = () => {
                     error={errors.content}
                     className="w-full mb-3"
                   />
-                  
-                  {/* Renderizar configuração de botões se o tipo for 'buttons' */}
-                  {renderButtonsConfig()}
+
+                  {/* Configuração de botões */}
+                  {newMessage.type === 'buttons' && (
+                    <div className="bg-gray-50 p-4 rounded-lg mb-3 border border-gray-200">
+                      <div className="flex items-center justify-between mb-3">
+                        <h5 className="font-medium text-sm">Configuração de Botões</h5>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleAddButtonOption}
+                        >
+                          Adicionar Botão
+                        </Button>
+                      </div>
+                      
+                      {buttonsConfig.length === 0 ? (
+                        <div className="text-center py-3 text-gray-500 text-sm">
+                          Adicione botões para interação
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          {buttonsConfig.map((button, index) => (
+                            <div key={index} className="border rounded-lg p-3 bg-white">
+                              <div className="flex justify-between items-center mb-2">
+                                <h6 className="font-medium text-sm text-gray-700">Botão {index + 1}</h6>
+                                <button
+                                  onClick={() => handleRemoveButtonOption(index)}
+                                  className="text-red-500 hover:text-red-700"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                              
+                              <div className="space-y-3">
+                                <TextField
+                                  label="Texto do botão"
+                                  value={button.text}
+                                  onChange={(e) => handleUpdateButtonConfig(index, 'text', e.target.value)}
+                                  placeholder="Ex: Sim, quero comprar"
+                                  size="sm"
+                                />
+                                
+                                <TextField
+                                  label="Mensagem de resposta"
+                                  value={button.responseMessage}
+                                  onChange={(e) => handleUpdateButtonConfig(index, 'responseMessage', e.target.value)}
+                                  placeholder="Texto que aparecerá como resposta do cliente"
+                                  size="sm"
+                                />
+                                
+                                <div className="border-t pt-3 mt-3">
+                                  <h6 className="text-xs font-medium mb-2 text-gray-700">Pular para mensagem específica:</h6>
+                                  
+                                  <Select
+                                    value={button.jumpTo || ''}
+                                    onChange={(e) => handleUpdateButtonConfig(index, 'jumpTo', e.target.value)}
+                                    options={[
+                                      { value: '', label: 'Continuar sequência normal' },
+                                      ...flow.messages.map(msg => ({
+                                        value: msg.id,
+                                        label: `${msg.content.substring(0, 30)}${msg.content.length > 30 ? '...' : ''}`
+                                      }))
+                                    ]}
+                                    size="sm"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   <div className="flex justify-end space-x-2">
                     {editMode === 'edit' ? (
@@ -994,6 +1339,7 @@ const FlowEditor = () => {
                             setButtonsConfig([]);
                             setEditMode(null);
                             setEditIndex(null);
+                            setShowMediaSelector(false);
                           }}
                         >
                           Cancelar
@@ -1015,6 +1361,95 @@ const FlowEditor = () => {
                         Adicionar Mensagem
                       </Button>
                     )}
+                  </div>
+                </div>
+              </div>
+            </Card>
+            
+            {/* Personalização da página de compartilhamento */}
+            <Card className="mt-6">
+              <div className="p-4">
+                <h3 className="font-medium text-gray-800 mb-3 flex items-center">
+                  <Eye size={16} className="mr-2 text-teal-600" />
+                  Personalização da Página de Visualização
+                </h3>
+                
+                <div className="space-y-4">
+                  <TextField
+                    label="Título da página"
+                    value={sharePageSettings.headerText}
+                    onChange={(e) => setSharePageSettings({...sharePageSettings, headerText: e.target.value})}
+                    placeholder="Ex: Oferta Especial - Lançamento Exclusivo"
+                  />
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Cor do cabeçalho
+                      </label>
+                      <input
+                        type="color"
+                        value={sharePageSettings.headerColor}
+                        onChange={(e) => setSharePageSettings({...sharePageSettings, headerColor: e.target.value})}
+                        className="w-full h-10 cursor-pointer rounded border"
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        URL da Logo (opcional)
+                      </label>
+                      <input
+                        type="text"
+                        value={sharePageSettings.logoUrl}
+                        onChange={(e) => setSharePageSettings({...sharePageSettings, logoUrl: e.target.value})}
+                        className="w-full border border-gray-300 rounded p-2 text-sm"
+                        placeholder="https://example.com/logo.png"
+                      />
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Imagem do produto (opcional)
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={sharePageSettings.productImage}
+                        onChange={(e) => setSharePageSettings({...sharePageSettings, productImage: e.target.value})}
+                        className="flex-1 border border-gray-300 rounded p-2 text-sm"
+                        placeholder="https://example.com/product.jpg"
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowMediaSelector(true)}
+                      >
+                        Selecionar
+                      </Button>
+                    </div>
+                  </div>
+                  
+                  <TextField
+                    label="Descrição do produto (opcional)"
+                    value={sharePageSettings.productDescription}
+                    onChange={(e) => setSharePageSettings({...sharePageSettings, productDescription: e.target.value})}
+                    placeholder="Breve descrição do seu produto ou serviço"
+                    multiline
+                    rows={2}
+                  />
+                  
+                  <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={sharePageSettings.watermarkEnabled}
+                        onChange={(e) => setSharePageSettings({...sharePageSettings, watermarkEnabled: e.target.checked})}
+                        className="rounded border-gray-300 text-teal-600 focus:ring-teal-500"
+                      />
+                      <span className="text-sm text-gray-700">Mostrar marca d'água do SimulaChat</span>
+                    </label>
                   </div>
                 </div>
               </div>
