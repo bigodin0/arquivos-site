@@ -38,7 +38,26 @@ const FlowEditor = () => {
   const messageEndRef = useRef(null);
   
   // Estados
-  const [flow, setFlow] = useState(null);
+  const [flow, setFlow] = useState({
+    id: '',
+    title: '',
+    description: '',
+    platform: 'whatsapp',
+    messages: [],
+    createdAt: new Date().toLocaleDateString(),
+    updatedAt: new Date().toLocaleDateString(),
+    sharePageSettings: {
+      showHeader: true,
+      headerColor: '#00A19D',
+      headerText: '',
+      logoUrl: '',
+      productImage: '',
+      productDescription: '',
+      showFooter: true,
+      footerText: '',
+      watermarkEnabled: true
+    }
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [newMessage, setNewMessage] = useState({ 
@@ -75,11 +94,24 @@ const FlowEditor = () => {
   // Obtendo detalhes do plano no nível do componente
   const currentPlan = getPlanDetails();
 
-  // Verificação de autenticação (adicionada da correção)
+  // Verificação de autenticação
   const checkAuthentication = () => {
     const token = localStorage.getItem('authToken');
     if (!token) {
       console.warn('Token de autenticação não encontrado');
+      
+      // Determine se estamos em modo de desenvolvimento ou produção
+      const isDevelopment = process.env.NODE_ENV === 'development' || 
+                          window.location.hostname === 'localhost';
+      
+      // Em desenvolvimento, podemos criar um token temporário para testes
+      if (isDevelopment) {
+        console.log('Modo de desenvolvimento: criando token temporário para testes');
+        const tempToken = 'dev_temp_token_' + Date.now();
+        localStorage.setItem('authToken', tempToken);
+        return true;
+      }
+      
       return false;
     }
     
@@ -97,6 +129,11 @@ const FlowEditor = () => {
     }
     
     return true;
+  };
+
+  // Função para gerar um novo ID de fluxo válido
+  const generateNewFlowId = () => {
+    return `flow-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
   };
 
   // Verificar disponibilidade de recursos com base no plano
@@ -129,14 +166,26 @@ const FlowEditor = () => {
   useEffect(() => {
     const loadMediaFiles = async () => {
       try {
-        // Correção: Verificar se o objeto existe e tem a função antes de chamar
+        // Verificar se o serviço de mídia existe
         if (StorageService && typeof StorageService.getMediaFiles === 'function') {
           const files = await StorageService.getMediaFiles();
-          setMediaFiles(files || []);
+          setMediaFiles(Array.isArray(files) ? files : []);
+          console.log('Arquivos de mídia carregados com sucesso');
         } else {
-          // Fallback para um array vazio se a função não existir
-          console.warn('StorageService.getMediaFiles não está disponível');
-          setMediaFiles([]);
+          // Se não houver serviço de mídia, tente obter do cache
+          console.log('Usando arquivos de mídia do cache');
+          const cachedFiles = localStorage.getItem('mediaCache');
+          if (cachedFiles) {
+            try {
+              const files = JSON.parse(cachedFiles);
+              setMediaFiles(Array.isArray(files) ? files : []);
+            } catch (error) {
+              console.error('Erro ao analisar cache de mídia:', error);
+              setMediaFiles([]);
+            }
+          } else {
+            setMediaFiles([]);
+          }
         }
       } catch (error) {
         console.error("Erro ao carregar arquivos de mídia:", error);
@@ -177,12 +226,24 @@ const FlowEditor = () => {
         setLoading(true);
         setError(null);
         
-        // Tentar obter o fluxo do localStorage primeiro como fallback seguro
-        const loadedFlow = StorageService.getFlow(id);
+        // Verificar se temos um ID válido
+        const flowId = id && id !== 'undefined' && id !== 'null' ? id : generateNewFlowId();
         
-        if (loadedFlow) {
+        // Tentar obter o fluxo do localStorage primeiro como fallback seguro
+        let loadedFlow = null;
+        
+        if (StorageService && typeof StorageService.getFlow === 'function') {
+          loadedFlow = StorageService.getFlow(flowId);
+        }
+        
+        if (loadedFlow && typeof loadedFlow === 'object') {
           // Garantir que o ID da URL seja atribuído ao fluxo
-          loadedFlow.id = id;
+          loadedFlow.id = flowId;
+          
+          // Garantir que loadedFlow.messages seja um array
+          if (!Array.isArray(loadedFlow.messages)) {
+            loadedFlow.messages = [];
+          }
           
           setFlow(loadedFlow);
           setOriginalTitle(loadedFlow.title || '');
@@ -195,9 +256,11 @@ const FlowEditor = () => {
           
           // Gerar links
           try {
-            const shareData = await StorageService.shareFlow(id);
-            setShareLink(shareData?.shareUrl || '#');
-            setEmbedLink(shareData?.embedUrl || '#');
+            if (StorageService && typeof StorageService.shareFlow === 'function') {
+              const shareData = await StorageService.shareFlow(flowId);
+              setShareLink(shareData?.shareUrl || '#');
+              setEmbedLink(shareData?.embedUrl || '#');
+            }
           } catch (error) {
             console.error("Erro ao gerar links:", error);
             setShareLink('#');
@@ -205,7 +268,7 @@ const FlowEditor = () => {
           }
         } else {
           // Se não existe um fluxo com este ID, criar um novo
-          const uniqueId = id || `flow_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+          const uniqueId = flowId;
           const newFlow = {
             id: uniqueId,
             title: 'Novo Fluxo',
@@ -233,17 +296,21 @@ const FlowEditor = () => {
           
           // Salvar o novo fluxo imediatamente para garantir persistência
           setTimeout(() => {
-            StorageService.saveFlow(newFlow);
+            if (StorageService && typeof StorageService.saveFlow === 'function') {
+              StorageService.saveFlow(newFlow);
+            }
           }, 0);
         }
         
-        // Verificar se o token é válido usando a nova função de checkAuthentication
+        // Verificar se o token é válido usando a função de checkAuthentication
         if (checkAuthentication()) {
           // Tentar buscar da API
           try {
-            const headers = SecureStorageService.getAuthHeaders().headers;
+            const headers = SecureStorageService && typeof SecureStorageService.getAuthHeaders === 'function' 
+              ? SecureStorageService.getAuthHeaders().headers 
+              : {};
             
-            const response = await axios.get(`${apiConfig.endpoints.flow(id)}`, {
+            const response = await axios.get(`${apiConfig.endpoints.flow(flowId)}`, {
               headers
             });
             
@@ -251,10 +318,10 @@ const FlowEditor = () => {
               const flowData = response.data.data;
               
               // Garantir que o ID da URL seja atribuído ao fluxo
-              flowData.id = id;
+              flowData.id = flowId;
               
               // Garantir que flowData.messages seja um array
-              if (!flowData.messages) {
+              if (!Array.isArray(flowData.messages)) {
                 flowData.messages = [];
               }
               
@@ -269,9 +336,11 @@ const FlowEditor = () => {
               
               // Gerar links de compartilhamento
               try {
-                const shareData = await StorageService.shareFlow(id);
-                setShareLink(shareData?.shareUrl || '#');
-                setEmbedLink(shareData?.embedUrl || '#');
+                if (StorageService && typeof StorageService.shareFlow === 'function') {
+                  const shareData = await StorageService.shareFlow(flowId);
+                  setShareLink(shareData?.shareUrl || '#');
+                  setEmbedLink(shareData?.embedUrl || '#');
+                }
               } catch (error) {
                 console.error("Erro ao gerar links:", error);
               }
@@ -301,7 +370,7 @@ const FlowEditor = () => {
 
   // Debounce para a função de salvamento
   useEffect(() => {
-    if (!flow) return;
+    if (!flow || !flow.title) return;
     
     // Limpar o timeout anterior se existir
     if (saveTimeoutId) {
@@ -387,6 +456,12 @@ const FlowEditor = () => {
   const handleDragEnd = (result) => {
     if (!result.destination) return;
     
+    // Verificar se flow e flow.messages existem
+    if (!flow || !Array.isArray(flow.messages)) {
+      console.warn('Tentativa de reordenar mensagens com estrutura de fluxo inválida');
+      return;
+    }
+    
     const items = Array.from(flow.messages);
     const [reorderedItem] = items.splice(result.source.index, 1);
     items.splice(result.destination.index, 0, reorderedItem);
@@ -419,35 +494,42 @@ const FlowEditor = () => {
     
     try {
       // Garantir que flow.messages seja sempre um array
-      if (!flow.messages) {
-        flow.messages = [];
-      }
+      const messages = Array.isArray(flow.messages) ? flow.messages : [];
       
       // Garantir que o ID seja definido
-      if (!flow.id) {
-        flow.id = id;
-      }
+      const safeId = (flow.id && flow.id !== 'undefined' && flow.id !== 'null') 
+        ? flow.id 
+        : (id && id !== 'undefined' && id !== 'null') 
+          ? id 
+          : generateNewFlowId();
       
       // Atualizar contagens
       const updatedFlow = {
         ...flow,
-        id: id, // Garantir que o ID está explicitamente definido
+        id: safeId, // Garantir que o ID está explicitamente definido
+        messages,
         platform: selectedPlatform,
-        messageCount: Array.isArray(flow.messages) ? flow.messages.length : 0,
+        messageCount: messages.length,
         updatedAt: new Date().toLocaleDateString(),
         sharePageSettings // Incluir configurações de personalização da página de compartilhamento
       };
       
       // Tentar salvar localmente primeiro para ter um fallback garantido
-      const savedFlow = StorageService.updateFlow(updatedFlow);
+      if (StorageService && typeof StorageService.updateFlow === 'function') {
+        StorageService.updateFlow(updatedFlow);
+      } else if (StorageService && typeof StorageService.saveFlow === 'function') {
+        StorageService.saveFlow(updatedFlow);
+      }
       
-      // Verificar se o token é válido usando a nova função de checkAuthentication
+      // Verificar se o token é válido usando a função de checkAuthentication
       if (checkAuthentication()) {
         try {
-          const headers = SecureStorageService.getAuthHeaders().headers;
+          const headers = SecureStorageService && typeof SecureStorageService.getAuthHeaders === 'function'
+            ? SecureStorageService.getAuthHeaders().headers
+            : {};
           
           const response = await axios.put(
-            apiConfig.endpoints.flow(id),
+            apiConfig.endpoints.flow(safeId),
             updatedFlow,
             { headers }
           );
@@ -462,7 +544,9 @@ const FlowEditor = () => {
           // Verificar se é erro de token inválido
           if (apiError.response && apiError.response.status === 401) {
             // Token expirado ou inválido
-            SecureStorageService.clearToken();
+            if (SecureStorageService && typeof SecureStorageService.clearToken === 'function') {
+              SecureStorageService.clearToken();
+            }
             // Não redirecionamos aqui para evitar perda de dados não salvos
           }
         }
@@ -521,6 +605,12 @@ const FlowEditor = () => {
         content: button.responseMessage || button.text,
         delay: 0
       };
+      
+      // Verificar se flow e flow.messages são válidos
+      if (!flow || !Array.isArray(flow.messages)) {
+        console.warn('Estrutura de fluxo inválida ao adicionar resposta do botão');
+        return;
+      }
       
       // Adicionar resposta ao fluxo
       setFlow(prevFlow => ({
@@ -593,6 +683,12 @@ const FlowEditor = () => {
       return;
     }
     
+    // Verificar se flow e flow.messages são válidos e se editIndex é válido
+    if (!flow || !Array.isArray(flow.messages) || editIndex === null || editIndex < 0 || editIndex >= flow.messages.length) {
+      console.warn('Tentativa de atualizar mensagem com índice ou estrutura inválidos');
+      return;
+    }
+    
     let updatedMessage = {
       ...flow.messages[editIndex],
       content: newMessage.content,
@@ -607,12 +703,13 @@ const FlowEditor = () => {
     }
     
     setFlow(prevFlow => {
-      const updatedMessages = [...prevFlow.messages];
-      updatedMessages[editIndex] = updatedMessage;
+      // Garantir que messages é um array
+      const messages = Array.isArray(prevFlow.messages) ? [...prevFlow.messages] : [];
+      messages[editIndex] = updatedMessage;
       
       return {
         ...prevFlow,
-        messages: updatedMessages
+        messages
       };
     });
     
@@ -633,15 +730,21 @@ const FlowEditor = () => {
     setTimeout(() => {
       handleSaveFlow();
     }, 500);
-  }, [newMessage, editIndex, flow?.messages, buttonsConfig, handleSaveFlow]);
+  }, [newMessage, editIndex, flow, buttonsConfig, handleSaveFlow]);
 
   const handleEditMessage = useCallback((index) => {
+    // Verificar se flow e flow.messages são válidos e se index é válido
+    if (!flow || !Array.isArray(flow.messages) || index < 0 || index >= flow.messages.length) {
+      console.warn('Tentativa de editar mensagem com índice ou estrutura inválidos');
+      return;
+    }
+    
     const message = flow.messages[index];
     setNewMessage({
-      type: message.type,
-      sender: message.sender,
-      content: message.content,
-      delay: message.delay
+      type: message.type || 'text',
+      sender: message.sender || 'business',
+      content: message.content || '',
+      delay: message.delay || 0
     });
     
     // Carregar config de botões se for uma mensagem de botões
@@ -660,9 +763,14 @@ const FlowEditor = () => {
     
     setEditMode('edit');
     setEditIndex(index);
-  }, [flow?.messages]);
+  }, [flow]);
 
   const handleDeleteMessage = useCallback((id) => {
+    if (!flow || !Array.isArray(flow.messages)) {
+      console.warn('Tentativa de excluir mensagem com estrutura inválida');
+      return;
+    }
+    
     if (window.confirm('Tem certeza que deseja excluir esta mensagem?')) {
       setFlow(prevFlow => ({
         ...prevFlow,
@@ -674,10 +782,15 @@ const FlowEditor = () => {
         handleSaveFlow();
       }, 500);
     }
-  }, [handleSaveFlow]);
+  }, [handleSaveFlow, flow]);
 
   const handleCopyLink = useCallback(async (type = 'share') => {
     try {
+      // Verificar se id é válido
+      if (!flow.id || flow.id === 'undefined' || flow.id === 'null') {
+        throw new Error("ID de fluxo inválido");
+      }
+      
       // Primeiro, garantir que o fluxo está salvo com dados atualizados
       const saved = await handleSaveFlow();
       
@@ -686,7 +799,13 @@ const FlowEditor = () => {
       }
       
       // Gerar links de compartilhamento
-      const shareData = await StorageService.shareFlow(id);
+      let shareData = null;
+      
+      if (StorageService && typeof StorageService.shareFlow === 'function') {
+        shareData = await StorageService.shareFlow(flow.id);
+      } else {
+        throw new Error("Função de compartilhamento não disponível");
+      }
       
       if (!shareData || !shareData.success) {
         throw new Error("Não foi possível gerar o link de compartilhamento");
@@ -717,13 +836,13 @@ const FlowEditor = () => {
       console.error("Erro ao copiar link:", error);
       alert("Erro ao gerar o link. Por favor, salve o fluxo primeiro e tente novamente.");
     }
-  }, [id, handleSaveFlow]);
+  }, [flow, handleSaveFlow]);
 
   const handlePreview = useCallback(() => {
     // Salvar antes de visualizar
     handleSaveFlow();
-    navigate(`/flow/${id}/preview`);
-  }, [handleSaveFlow, id, navigate]);
+    navigate(`/flow/${flow.id}/preview`);
+  }, [handleSaveFlow, flow.id, navigate]);
 
   // Função para selecionar arquivo de mídia
   const handleSelectMedia = (fileUrl) => {
@@ -918,9 +1037,9 @@ const FlowEditor = () => {
     );
   }, [selectedPlatform, getPlatformTheme, handleEditMessage, handleDeleteMessage, handleButtonInteraction]);
   
-  // Uso de useMemo para otimizar renderização de mensagens
-  const renderMessages = useMemo(() => {
-    // Garantir que flow e flow.messages sejam válidos
+  // Correção específica para o erro de map undefined na linha 1146
+  const renderMessages = () => {
+    // Verificação de segurança para garantir que flow e flow.messages existam
     if (!flow || !Array.isArray(flow.messages) || flow.messages.length === 0) {
       return (
         <div className="flex flex-col items-center justify-center h-60 text-gray-400">
@@ -930,8 +1049,9 @@ const FlowEditor = () => {
         </div>
       );
     }
+    
     return flow.messages.map((message, index) => renderMessageBubble(message, index));
-  }, [flow?.messages, renderMessageBubble]);
+  };
   
   const renderPlatformPreview = useMemo(() => {
     const theme = getPlatformTheme(selectedPlatform);
@@ -1143,7 +1263,7 @@ const FlowEditor = () => {
                         {...provided.droppableProps}
                         ref={provided.innerRef}
                       >
-                        {flow.messages.map((message, index) => (
+                        {Array.isArray(flow.messages) && flow.messages.map((message, index) => (
                           <Draggable 
                             key={message.id.toString()} 
                             draggableId={message.id.toString()} 
@@ -1308,10 +1428,10 @@ const FlowEditor = () => {
                                     onChange={(e) => handleUpdateButtonConfig(index, 'jumpTo', e.target.value)}
                                     options={[
                                       { value: '', label: 'Continuar sequência normal' },
-                                      ...flow.messages.map(msg => ({
+                                      ...(Array.isArray(flow.messages) ? flow.messages.map(msg => ({
                                         value: msg.id,
-                                        label: `${msg.content.substring(0, 30)}${msg.content.length > 30 ? '...' : ''}`
-                                      }))
+                                        label: `${msg.content ? msg.content.substring(0, 30) : ''}${msg.content && msg.content.length > 30 ? '...' : ''}`
+                                      })) : [])
                                     ]}
                                     size="sm"
                                   />
@@ -1509,7 +1629,7 @@ const FlowEditor = () => {
                   </p>
                   <p>
                     <span className="font-medium text-gray-700">ID do Fluxo:</span>{' '}
-                    <span className="font-mono text-xs">{id}</span>
+                    <span className="font-mono text-xs">{flow.id}</span>
                   </p>
                 </div>
 
@@ -1519,7 +1639,9 @@ const FlowEditor = () => {
                     onClick={() => {
                       if (window.confirm('Tem certeza que deseja excluir este fluxo? Esta ação não pode ser desfeita.')) {
                         // Lógica para excluir fluxo
-                        StorageService.deleteFlow(id);
+                        if (StorageService && typeof StorageService.deleteFlow === 'function') {
+                          StorageService.deleteFlow(flow.id);
+                        }
                         navigate('/dashboard');
                       }
                     }}

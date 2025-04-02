@@ -5,6 +5,61 @@ import SecureStorageService from './secureStorage';
 // URL base da API - Obtida do apiConfig
 const API_BASE_URL = ApiService.getBaseUrl();
 
+/**
+ * Verifica se um ID é válido
+ * @param {string|null} id - O ID a ser verificado
+ * @return {boolean} - Verdadeiro se o ID for válido, falso caso contrário
+ */
+const isValidId = (id) => {
+  // Verificar se o ID não é undefined, null, string vazia ou 'undefined'/'null' como string
+  return id !== undefined && 
+         id !== null && 
+         id !== '' && 
+         id !== 'undefined' && 
+         id !== 'null' &&
+         typeof id === 'string';
+};
+
+/**
+ * Gera um novo ID único para um fluxo
+ * @return {string} - Um novo ID único
+ */
+const generateFlowId = () => {
+  return `flow_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+};
+
+/**
+ * Garante que o objeto de fluxo tenha uma estrutura válida
+ * @param {Object|null} flowData - Os dados do fluxo a serem validados
+ * @param {string|null} id - Um ID opcional para atribuir ao fluxo
+ * @return {Object} - Um objeto de fluxo com estrutura válida
+ */
+const ensureValidFlowStructure = (flowData, id = null) => {
+  // Se não houver dados, crie um objeto vazio
+  const safeFlow = flowData || {};
+  
+  // Garanta que messages seja um array
+  safeFlow.messages = Array.isArray(safeFlow.messages) ? safeFlow.messages : [];
+  
+  // Se um ID foi fornecido e é válido, use-o
+  if (isValidId(id)) {
+    safeFlow.id = id;
+  } 
+  // Se o fluxo já tem um ID válido, mantenha-o
+  else if (!isValidId(safeFlow.id)) {
+    safeFlow.id = generateFlowId();
+  }
+  
+  // Garantir outros campos essenciais
+  safeFlow.title = safeFlow.title || 'Novo Fluxo';
+  safeFlow.description = safeFlow.description || '';
+  safeFlow.platform = safeFlow.platform || 'whatsapp';
+  safeFlow.contactName = safeFlow.contactName || 'Atendimento';
+  safeFlow.messageCount = safeFlow.messages.length;
+  
+  return safeFlow;
+};
+
 const StorageService = {
   // Chaves para diferentes tipos de dados
   KEYS: {
@@ -59,11 +114,11 @@ const StorageService = {
     }
   },
 
-  // Garantir que temos um ID válido
+  // Garantir que temos um ID válido - Agora usa a função isValidId
   ensureValidId: (id) => {
-    if (!id || id === 'undefined' || id === 'null') {
+    if (!isValidId(id)) {
       // Gerar um ID único se não for fornecido ou inválido
-      return `flow_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      return generateFlowId();
     }
     return id;
   },
@@ -86,9 +141,12 @@ const StorageService = {
           const response = await ApiService.flows.getAll();
           
           if (response && response.success) {
+            // Garantir que todos os fluxos tenham estrutura válida
+            const validatedFlows = response.data.map(flow => ensureValidFlowStructure(flow));
+            
             // Salvar no cache
-            StorageService.setCachedData('flows', response.data);
-            return response.data;
+            StorageService.setCachedData('flows', validatedFlows);
+            return validatedFlows;
           }
         } catch (apiError) {
           console.warn('Erro ao buscar fluxos da API:', apiError);
@@ -99,7 +157,10 @@ const StorageService = {
       // Fallback para localStorage
       console.warn('Fallback: Usando fluxos do localStorage');
       const flows = localStorage.getItem(StorageService.KEYS.FLOWS);
-      const parsedFlows = flows ? JSON.parse(flows) : [];
+      let parsedFlows = flows ? JSON.parse(flows) : [];
+      
+      // Garantir que todos os fluxos tenham estrutura válida
+      parsedFlows = parsedFlows.map(flow => ensureValidFlowStructure(flow));
       
       // Salvar no cache
       StorageService.setCachedData('flows', parsedFlows);
@@ -115,36 +176,30 @@ const StorageService = {
   // Salvar um fluxo
   saveFlow: async (flow) => {
     try {
-      // Garantir que temos um ID válido
-      if (!flow.id || flow.id === 'undefined' || flow.id === 'null') {
-        flow.id = StorageService.ensureValidId(flow.id);
-        flow.createdAt = new Date().toLocaleDateString();
-      }
+      // Garantir que o fluxo tenha estrutura válida
+      const safeFlow = ensureValidFlowStructure(flow);
       
-      // Garantir que flow.messages seja sempre um array
-      if (!flow.messages) {
-        flow.messages = [];
+      // Se não tem data de criação, adicionar
+      if (!safeFlow.createdAt) {
+        safeFlow.createdAt = new Date().toLocaleDateString();
       }
-      
-      // Calcular messageCount
-      flow.messageCount = Array.isArray(flow.messages) ? flow.messages.length : 0;
       
       // Atualizar timestamp
-      flow.updatedAt = new Date().toLocaleDateString();
+      safeFlow.updatedAt = new Date().toLocaleDateString();
       
-      // Se tem um ID, é uma atualização
-      if (flow.id) {
-        return StorageService.updateFlow(flow);
+      // Se tem um ID válido, é uma atualização
+      if (isValidId(safeFlow.id)) {
+        return StorageService.updateFlow(safeFlow);
       }
       
       // Preparar dados para a API
       const flowData = {
-        title: flow.title || 'Novo Fluxo',
-        description: flow.description || '',
-        platform: flow.platform || 'whatsapp',
-        messages: flow.messages || [],
-        contactName: flow.contactName || 'Atendimento',
-        id: flow.id
+        title: safeFlow.title,
+        description: safeFlow.description,
+        platform: safeFlow.platform,
+        messages: safeFlow.messages,
+        contactName: safeFlow.contactName,
+        id: safeFlow.id
       };
       
       // Tentar salvar na API se o token for válido
@@ -175,12 +230,12 @@ const StorageService = {
       const baseUrl = window.location.origin;
       
       // Garantir que o link use o domínio atual
-      if (!flow.link || flow.link.includes('simulachat.app')) {
-        flow.link = `${baseUrl}/flow/${flow.id}`;
+      if (!safeFlow.link || safeFlow.link.includes('simulachat.app')) {
+        safeFlow.link = `${baseUrl}/flow/${safeFlow.id}`;
       }
       
       // Adicionar ao array de fluxos
-      flows.push(flow);
+      flows.push(safeFlow);
       
       // Salvar no localStorage
       localStorage.setItem(StorageService.KEYS.FLOWS, JSON.stringify(flows));
@@ -191,7 +246,7 @@ const StorageService = {
       // Invalidar o cache de fluxos
       StorageService.invalidateCache('flows');
       
-      return flow;
+      return safeFlow;
     } catch (error) {
       console.error('Erro ao salvar fluxo:', error);
       // Último fallback: tentar salvar apenas no localStorage
@@ -199,28 +254,21 @@ const StorageService = {
         const flows = localStorage.getItem(StorageService.KEYS.FLOWS);
         const flowsArray = flows ? JSON.parse(flows) : [];
         
-        // Gerar ID se necessário
-        if (!flow.id) {
-          flow.id = StorageService.ensureValidId(flow.id);
-          flow.createdAt = new Date().toLocaleDateString();
+        // Garantir que o fluxo tenha estrutura válida
+        const safeFlow = ensureValidFlowStructure(flow);
+        
+        // Adicionar timestamps se não existirem
+        if (!safeFlow.createdAt) {
+          safeFlow.createdAt = new Date().toLocaleDateString();
         }
-        
-        flow.updatedAt = new Date().toLocaleDateString();
-        
-        // Garantir que flow.messages seja sempre um array
-        if (!flow.messages) {
-          flow.messages = [];
-        }
-        
-        // Calcular messageCount
-        flow.messageCount = Array.isArray(flow.messages) ? flow.messages.length : 0;
+        safeFlow.updatedAt = new Date().toLocaleDateString();
         
         // Verificar se já existe
-        const existingIndex = flowsArray.findIndex(f => f.id === flow.id);
+        const existingIndex = flowsArray.findIndex(f => f.id === safeFlow.id);
         if (existingIndex !== -1) {
-          flowsArray[existingIndex] = flow;
+          flowsArray[existingIndex] = safeFlow;
         } else {
-          flowsArray.push(flow);
+          flowsArray.push(safeFlow);
         }
         
         localStorage.setItem(StorageService.KEYS.FLOWS, JSON.stringify(flowsArray));
@@ -229,7 +277,7 @@ const StorageService = {
         // Invalidar o cache de fluxos
         StorageService.invalidateCache('flows');
         
-        return flow;
+        return safeFlow;
       } catch (localError) {
         console.error('Erro no fallback local:', localError);
         return null;
@@ -244,38 +292,27 @@ const StorageService = {
       return null;
     }
     
-    // Garantir que temos um ID válido
-    if (!flow.id || flow.id === 'undefined' || flow.id === 'null') {
-      flow.id = StorageService.ensureValidId(flow.id);
-      console.warn(`ID de fluxo inválido foi substituído por: ${flow.id}`);
-    }
+    // Garantir que temos um fluxo com estrutura válida
+    const safeFlow = ensureValidFlowStructure(flow);
     
     try {
-      // Garantir que flow.messages seja sempre um array
-      if (!flow.messages) {
-        flow.messages = [];
-      }
-      
-      // Calcular messageCount
-      flow.messageCount = Array.isArray(flow.messages) ? flow.messages.length : 0;
-      
       // Atualizar o timestamp de atualização
-      flow.updatedAt = new Date().toLocaleDateString();
+      safeFlow.updatedAt = new Date().toLocaleDateString();
       
       // Preparar dados para a API
       const flowData = {
-        title: flow.title || 'Fluxo Atualizado',
-        description: flow.description || '',
-        platform: flow.platform || 'whatsapp',
-        messages: flow.messages || [],
-        contactName: flow.contactName || 'Atendimento',
-        sharePageSettings: flow.sharePageSettings || {}
+        title: safeFlow.title,
+        description: safeFlow.description,
+        platform: safeFlow.platform,
+        messages: safeFlow.messages,
+        contactName: safeFlow.contactName,
+        sharePageSettings: safeFlow.sharePageSettings || {}
       };
       
       // Tentar atualizar na API se o token for válido
       if (SecureStorageService.isTokenValid()) {
         try {
-          const response = await ApiService.flows.update(flow.id, flowData);
+          const response = await ApiService.flows.update(safeFlow.id, flowData);
           
           if (response && response.success) {
             // Atualizar estatísticas
@@ -283,7 +320,7 @@ const StorageService = {
             
             // Invalidar cache
             StorageService.invalidateCache('flows');
-            StorageService.invalidateCache(`flow_${flow.id}`);
+            StorageService.invalidateCache(`flow_${safeFlow.id}`);
             
             return response.data;
           }
@@ -308,18 +345,18 @@ const StorageService = {
       let flows = storedFlows ? JSON.parse(storedFlows) : [];
       
       // Procurar o fluxo pelo ID
-      const index = flows.findIndex(f => f.id === flow.id);
+      const index = flows.findIndex(f => f.id === safeFlow.id);
       
       if (index === -1) {
         // Se o fluxo não existir, adicioná-lo como novo
-        console.warn(`Fluxo com ID ${flow.id} não encontrado para atualização. Adicionando como novo.`);
-        flow.createdAt = flow.createdAt || new Date().toLocaleDateString();
-        flows.push(flow);
+        console.warn(`Fluxo com ID ${safeFlow.id} não encontrado para atualização. Adicionando como novo.`);
+        safeFlow.createdAt = safeFlow.createdAt || new Date().toLocaleDateString();
+        flows.push(safeFlow);
       } else {
         // Preservar a data de criação
-        flow.createdAt = flows[index].createdAt;
+        safeFlow.createdAt = flows[index].createdAt;
         // Atualizar o fluxo no array
-        flows[index] = flow;
+        flows[index] = safeFlow;
       }
       
       // Salvar no localStorage
@@ -330,9 +367,9 @@ const StorageService = {
       
       // Invalidar cache
       StorageService.invalidateCache('flows');
-      StorageService.invalidateCache(`flow_${flow.id}`);
+      StorageService.invalidateCache(`flow_${safeFlow.id}`);
       
-      return flow;
+      return safeFlow;
     } catch (error) {
       console.error('Erro ao atualizar fluxo:', error);
       // Último fallback: tentar atualizar apenas no localStorage
@@ -340,17 +377,17 @@ const StorageService = {
         const flows = localStorage.getItem(StorageService.KEYS.FLOWS);
         const flowsArray = flows ? JSON.parse(flows) : [];
         
-        const index = flowsArray.findIndex(f => f.id === flow.id);
+        const index = flowsArray.findIndex(f => f.id === safeFlow.id);
         
         if (index === -1) {
           // Se o fluxo não existir, adicioná-lo como novo
-          console.warn(`Fluxo com ID ${flow.id} não encontrado para atualização. Adicionando como novo.`);
-          flow.createdAt = flow.createdAt || new Date().toLocaleDateString();
-          flowsArray.push(flow);
+          console.warn(`Fluxo com ID ${safeFlow.id} não encontrado para atualização. Adicionando como novo.`);
+          safeFlow.createdAt = safeFlow.createdAt || new Date().toLocaleDateString();
+          flowsArray.push(safeFlow);
         } else {
           // Preservar a data de criação
-          flow.createdAt = flowsArray[index].createdAt;
-          flowsArray[index] = flow;
+          safeFlow.createdAt = flowsArray[index].createdAt;
+          flowsArray[index] = safeFlow;
         }
         
         try {
@@ -359,9 +396,9 @@ const StorageService = {
           
           // Invalidar cache
           StorageService.invalidateCache('flows');
-          StorageService.invalidateCache(`flow_${flow.id}`);
+          StorageService.invalidateCache(`flow_${safeFlow.id}`);
           
-          return flow;
+          return safeFlow;
         } catch (storageError) {
           console.error('Erro ao salvar no localStorage:', storageError);
           return null;
@@ -376,7 +413,7 @@ const StorageService = {
   // Excluir um fluxo
   deleteFlow: async (id) => {
     // Garantir que temos um ID válido
-    if (!id || id === 'undefined' || id === 'null') {
+    if (!isValidId(id)) {
       console.error("Tentativa de excluir um fluxo com ID inválido");
       return null;
     }
@@ -459,9 +496,10 @@ const StorageService = {
   // Obter um fluxo específico
   getFlow: async (id) => {
     // Garantir que temos um ID válido
-    if (!id || id === 'undefined' || id === 'null') {
-      console.warn("getFlow: ID inválido fornecido");
-      return null;
+    if (!isValidId(id)) {
+      console.warn("getFlow: ID inválido fornecido", id);
+      // Retornar um fluxo vazio mas válido
+      return ensureValidFlowStructure(null);
     }
     
     try {
@@ -469,7 +507,7 @@ const StorageService = {
       const cachedFlow = StorageService.getCachedData(`flow_${id}`);
       if (cachedFlow) {
         console.log(`Usando fluxo ${id} do cache`);
-        return cachedFlow;
+        return ensureValidFlowStructure(cachedFlow);
       }
       
       // Tentar obter da API se o token for válido
@@ -478,13 +516,10 @@ const StorageService = {
           const response = await ApiService.flows.getById(id);
           
           if (response && response.success) {
-            // Garantir que messages seja um array
-            if (!response.data.messages) {
-              response.data.messages = [];
-            }
+            const safeFlow = ensureValidFlowStructure(response.data, id);
             // Salvar no cache
-            StorageService.setCachedData(`flow_${id}`, response.data);
-            return response.data;
+            StorageService.setCachedData(`flow_${id}`, safeFlow);
+            return safeFlow;
           }
         } catch (apiError) {
           console.warn('Erro ao obter fluxo da API:', apiError);
@@ -503,46 +538,40 @@ const StorageService = {
       console.warn('Fallback: Obtendo fluxo do localStorage');
       
       const flows = localStorage.getItem(StorageService.KEYS.FLOWS);
-      if (!flows) return null;
+      if (!flows) return ensureValidFlowStructure(null, id);
       
       const flowsArray = JSON.parse(flows);
       const flow = flowsArray.find(f => String(f.id) === String(id));
       
-      // Garantir que messages seja um array
-      if (flow && !flow.messages) {
-        flow.messages = [];
-      }
+      // Garantir estrutura válida
+      const safeFlow = ensureValidFlowStructure(flow, id);
       
       // Salvar no cache se encontrado
-      if (flow) {
-        StorageService.setCachedData(`flow_${id}`, flow);
+      if (safeFlow) {
+        StorageService.setCachedData(`flow_${id}`, safeFlow);
       }
       
-      return flow;
+      return safeFlow;
     } catch (error) {
       console.error('Erro ao obter fluxo:', error);
       // Último fallback: tentar obter diretamente do localStorage
       try {
         const flows = localStorage.getItem(StorageService.KEYS.FLOWS);
-        if (!flows) return null;
+        if (!flows) return ensureValidFlowStructure(null, id);
         
         try {
           const flowsArray = JSON.parse(flows);
           const flow = flowsArray.find(f => String(f.id) === String(id));
           
-          // Garantir que messages seja um array
-          if (flow && !flow.messages) {
-            flow.messages = [];
-          }
-          
-          return flow;
+          // Garantir estrutura válida
+          return ensureValidFlowStructure(flow, id);
         } catch (parseError) {
           console.error('Erro ao analisar fluxos:', parseError);
-          return null;
+          return ensureValidFlowStructure(null, id);
         }
       } catch (localError) {
         console.error('Erro no fallback local:', localError);
-        return null;
+        return ensureValidFlowStructure(null, id);
       }
     }
   },
@@ -575,38 +604,43 @@ const StorageService = {
 
   // Compartilhar um fluxo
   shareFlow: async (flowId) => {
-    // Garantir que temos um ID válido
-    if (!flowId || flowId === 'undefined' || flowId === 'null') {
-      console.error("Tentativa de compartilhar um fluxo com ID inválido");
+    // Verificar se o flowId é um objeto ou um ID
+    let flowToShare;
+    
+    // Se for um objeto, usar diretamente
+    if (typeof flowId === 'object' && flowId !== null) {
+      flowToShare = flowId;
+    } 
+    // Se for um ID, garantir que é válido e obter o fluxo
+    else if (isValidId(flowId)) {
+      // Obter o fluxo
+      flowToShare = await StorageService.getFlow(flowId);
+    } 
+    // Se não for válido, retornar erro
+    else {
+      console.error("Tentativa de compartilhar um fluxo com ID inválido", flowId);
       return {
         success: false,
         error: 'ID de fluxo inválido'
       };
     }
     
+    // Verificar se o fluxo foi encontrado
+    if (!flowToShare) {
+      return {
+        success: false,
+        error: 'Fluxo não encontrado'
+      };
+    }
+    
+    // Garantir que o fluxo tenha estrutura válida
+    const safeFlow = ensureValidFlowStructure(flowToShare);
+    
     try {
-      // Obter o fluxo
-      let flowToShare;
-      
-      // Se for um ID, obter o fluxo
-      if (typeof flowId !== 'object') {
-        flowToShare = await StorageService.getFlow(flowId);
-        
-        if (!flowToShare) {
-          return {
-            success: false,
-            error: 'Fluxo não encontrado'
-          };
-        }
-      } else {
-        // Se for um objeto de fluxo, usar diretamente
-        flowToShare = flowId;
-      }
-      
       // Tentar compartilhar via API se o token for válido
       if (SecureStorageService.isTokenValid()) {
         try {
-          const response = await ApiService.sharedFlows.share(flowToShare.id);
+          const response = await ApiService.sharedFlows.share(safeFlow.id);
           
           if (response && response.success) {
             // Atualizar estatísticas
@@ -632,14 +666,14 @@ const StorageService = {
       console.warn('Fallback: Compartilhando fluxo localmente');
       
       // Gerar ID de compartilhamento
-      const shareId = `f${flowToShare.id}_${StorageService.generateShareId()}`;
+      const shareId = `f${safeFlow.id}_${StorageService.generateShareId()}`;
       
       // Obter fluxos compartilhados existentes
       const sharedFlows = StorageService.getSharedFlows();
       
       // Adicionar novo compartilhamento
       sharedFlows[shareId] = {
-        flow: flowToShare,
+        flow: safeFlow,
         createdAt: new Date().toISOString(),
         views: 0
       };
@@ -671,7 +705,8 @@ const StorageService = {
 
   // Obter um fluxo compartilhado pelo ID
   getSharedFlow: async (shareId) => {
-    if (!shareId) {
+    if (!isValidId(shareId)) {
+      console.warn('getSharedFlow: ID inválido fornecido', shareId);
       return null;
     }
     
@@ -687,6 +722,11 @@ const StorageService = {
       try {
         const response = await ApiService.sharedFlows.getById(shareId);
         if (response && response.success) {
+          // Garantir estrutura válida do fluxo
+          if (response.data && response.data.flow) {
+            response.data.flow = ensureValidFlowStructure(response.data.flow);
+          }
+          
           // Salvar no cache
           StorageService.setCachedData(`shared_flow_${shareId}`, response.data);
           
@@ -711,6 +751,11 @@ const StorageService = {
       const sharedFlow = sharedFlows[shareId];
       
       if (sharedFlow) {
+        // Garantir estrutura válida do fluxo
+        if (sharedFlow.flow) {
+          sharedFlow.flow = ensureValidFlowStructure(sharedFlow.flow);
+        }
+        
         // Incrementar contagem de visualizações
         sharedFlow.views = (sharedFlow.views || 0) + 1;
         localStorage.setItem(StorageService.KEYS.SHARED, JSON.stringify(sharedFlows));
@@ -730,7 +775,14 @@ const StorageService = {
       // Último fallback
       try {
         const sharedFlows = StorageService.getSharedFlows();
-        return sharedFlows[shareId] || null;
+        const sharedFlow = sharedFlows[shareId];
+        
+        if (sharedFlow && sharedFlow.flow) {
+          // Garantir estrutura válida
+          sharedFlow.flow = ensureValidFlowStructure(sharedFlow.flow);
+        }
+        
+        return sharedFlow || null;
       } catch (localError) {
         console.error('Erro no fallback local:', localError);
         return null;
@@ -871,7 +923,7 @@ const StorageService = {
 
   // Método para obter um fluxo compartilhado para exibição pública
   getFlowForPublicSharing: async (flowId) => {
-    if (!flowId || flowId === 'undefined' || flowId === 'null') {
+    if (!isValidId(flowId)) {
       console.error("ID inválido fornecido para compartilhamento público");
       return null;
     }
@@ -892,10 +944,12 @@ const StorageService = {
         
         if (response && response.success) {
           console.log("Fluxo encontrado na API:", flowId);
-          // Garantir que messages seja um array
-          if (!response.data.flow.messages) {
-            response.data.flow.messages = [];
+          
+          // Garantir que o fluxo tenha estrutura válida
+          if (response.data && response.data.flow) {
+            response.data.flow = ensureValidFlowStructure(response.data.flow);
           }
+          
           // Salvar no cache
           StorageService.setCachedData(`public_flow_${flowId}`, response.data);
           return response.data;
@@ -923,9 +977,9 @@ const StorageService = {
       const [shareKey, shareData] = matchingShare;
       console.log("Fluxo compartilhado encontrado localmente:", shareKey);
       
-      // Garantir que messages seja um array
-      if (!shareData.flow.messages) {
-        shareData.flow.messages = [];
+      // Garantir que o fluxo tenha estrutura válida
+      if (shareData && shareData.flow) {
+        shareData.flow = ensureValidFlowStructure(shareData.flow);
       }
       
       // Salvar no cache
@@ -938,20 +992,18 @@ const StorageService = {
     if (flow) {
       console.log("Fluxo encontrado localmente:", flowId);
       
-      // Garantir que messages seja um array
-      if (!flow.messages) {
-        flow.messages = [];
-      }
+      // Garantir que o fluxo tenha estrutura válida
+      const safeFlow = ensureValidFlowStructure(flow);
       
       const flowData = {
         flow: {
-          id: flow.id,
-          title: flow.title || 'Fluxo Compartilhado',
-          description: flow.description || '',
-          platform: flow.platform || 'whatsapp',
-          contactName: flow.contactName || 'Atendimento',
-          messages: flow.messages || [],
-          sharePageSettings: flow.sharePageSettings || {}
+          id: safeFlow.id,
+          title: safeFlow.title,
+          description: safeFlow.description,
+          platform: safeFlow.platform,
+          contactName: safeFlow.contactName,
+          messages: safeFlow.messages,
+          sharePageSettings: safeFlow.sharePageSettings || {}
         },
         createdAt: new Date().toISOString(),
         views: 0
@@ -997,7 +1049,12 @@ const StorageService = {
     }
     
     return updatedFlows;
-  }
+  },
+  
+  // Métodos adicionais para validação de ID
+  isValidId: isValidId,
+  generateFlowId: generateFlowId,
+  ensureValidFlowStructure: ensureValidFlowStructure
 };
 
 export default StorageService;
